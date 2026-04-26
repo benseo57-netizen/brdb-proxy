@@ -2,7 +2,7 @@ name: Battery Daily Brief
 
 on:
   schedule:
-    - cron: '30 21 * * *'  # 매일 06:30 KST (UTC 21:30)
+    - cron: '0 21 * * *'  # 매일 06:00 KST (UTC 21:00)
   workflow_dispatch:
 
 jobs:
@@ -28,4 +28,5 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          BCC_EMAIL: ${{ secrets.BCC_EMAIL }}
         run: python main.py
