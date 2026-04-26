@@ -3,6 +3,11 @@ import json
 import asyncio
 import smtplib
 import requests
+import time
+import re
+import html as html_lib
+import xml.etree.ElementTree as ET
+import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
@@ -10,10 +15,10 @@ from playwright.async_api import async_playwright
 import google.generativeai as genai
 
 # 환경변수
-GEMINI_API_KEY  = os.environ['GEMINI_API_KEY']
-GMAIL_USER      = os.environ['GMAIL_USER']
-GMAIL_APP_PASS  = os.environ['GMAIL_APP_PASSWORD']
-TO_EMAIL        = os.environ['TO_EMAIL']
+GEMINI_API_KEY = os.environ['GEMINI_API_KEY']
+GMAIL_USER     = os.environ['GMAIL_USER']
+GMAIL_APP_PASS = os.environ['GMAIL_APP_PASSWORD']
+TO_EMAIL       = os.environ['TO_EMAIL']
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -62,18 +67,23 @@ NOISE_SOURCES = [
 ]
 
 # ============================================================
-# RSS 수집
+# 유틸
 # ============================================================
-import xml.etree.ElementTree as ET
-import re
-import time
-import html as html_lib
-
 def decode_entities(text):
     return html_lib.unescape(text or "")
 
+def esc(text):
+    """HTML 특수문자 이스케이프"""
+    return (str(text or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+# ============================================================
+# RSS 수집
+# ============================================================
 def collect_rss():
-    import urllib.parse
     cutoff = datetime.utcnow() - timedelta(hours=72)
     raw = []
     seen = set()
@@ -94,35 +104,37 @@ def collect_rss():
             root = ET.fromstring(resp.content)
             ns = {"atom": "http://www.w3.org/2005/Atom"}
             is_atom = root.tag.endswith("feed")
-
             entries = root.findall(".//atom:entry", ns) if is_atom else root.findall(".//item")
 
             for entry in entries:
                 if is_atom:
-                    title = decode_entities((entry.find("atom:title", ns) or entry.find("title")).text or "")
+                    title_el = entry.find("atom:title", ns) or entry.find("title")
+                    title = decode_entities((title_el.text or "") if title_el is not None else "")
                     title = re.sub(r'<[^>]+>', '', title)
                     link_el = entry.find("atom:link", ns)
                     link = link_el.get("href", "") if link_el is not None else ""
-                    pub = (entry.findtext("atom:published", "", ns) or entry.findtext("atom:updated", "", ns))
+                    pub = (entry.findtext("atom:published", "", ns) or
+                           entry.findtext("atom:updated", "", ns))
                     source = "SMM Metal"
                     snippet = decode_entities(re.sub(r'<[^>]+>', '', (
                         entry.findtext("atom:summary", "", ns) or
                         entry.findtext("atom:content", "", ns) or ""
-                    )))[:300]
+                    )))[:200]
                 else:
                     title = decode_entities((entry.findtext("title") or "").strip())
                     link = (entry.findtext("link") or "").strip()
                     pub = (entry.findtext("pubDate") or "").strip()
                     source_el = entry.find("source")
                     source = source_el.text.strip() if source_el is not None else ""
-                    snippet = decode_entities(re.sub(r'<[^>]+>', '', entry.findtext("description") or ""))[:300]
+                    snippet = decode_entities(re.sub(r'<[^>]+>', '',
+                        entry.findtext("description") or ""))[:200]
 
                 if not title or not link or link in seen:
                     continue
 
-                lower_title = title.lower()
+                lower_title  = title.lower()
                 lower_source = source.lower()
-                lower_link = link.lower()
+                lower_link   = link.lower()
 
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
@@ -142,10 +154,9 @@ def collect_rss():
     # 중복 제거
     deduped = []
     for a in raw:
-        words = set(re.sub(r'[^\w\s]', ' ', a["title"]).split())
-        words = {w for w in words if len(w) >= 2}
+        words = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
         is_dup = any(
-            len(words & set(w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2)) >= 3
+            len(words & {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}) >= 3
             for b in deduped
         )
         if not is_dup:
@@ -153,6 +164,22 @@ def collect_rss():
 
     print(f"수집: {len(raw)}건 → 중복 제거 후: {len(deduped)}건")
     return deduped
+
+# ============================================================
+# Jina로 본문 추출
+# ============================================================
+def fetch_body(real_url):
+    try:
+        resp = requests.get(
+            f"https://r.jina.ai/{real_url}",
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if resp.status_code == 200:
+            return resp.text[:500]
+    except Exception as e:
+        print(f"Jina 오류: {e}")
+    return ""
 
 # ============================================================
 # Playwright로 실제 URL 추출
@@ -168,27 +195,11 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# Jina로 본문 추출
-# ============================================================
-def fetch_body(real_url):
-    try:
-        resp = requests.get(
-            f"https://r.jina.ai/{real_url}",
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        if resp.status_code == 200:
-            return resp.text[:1500]
-    except Exception as e:
-        print(f"Jina 오류: {e}")
-    return ""
-
-# ============================================================
-# 본문 수집 (Playwright + Jina)
+# 본문 수집 (SMM 3건 + 일반 9건 = 최대 12건)
 # ============================================================
 async def enrich_articles(articles):
-    smm = [a for a in articles if "SMM" in a.get("source", "")][:3]
-    general = [a for a in articles if "SMM" not in a.get("source", "")][:15]
+    smm     = [a for a in articles if "SMM" in a.get("source", "")][:3]
+    general = [a for a in articles if "SMM" not in a.get("source", "")][:9]
     targets = smm + general
 
     async with async_playwright() as p:
@@ -202,27 +213,26 @@ async def enrich_articles(articles):
         })
 
         for i, article in enumerate(targets):
-            print(f"[{i+1}/{len(targets)}] 본문 추출 중: {article['title'][:50]}")
+            print(f"[{i+1}/{len(targets)}] {article['title'][:50]}")
             link = article["link"]
 
-            # SMM은 직접 URL이라 Jina 바로 시도
+            # SMM 또는 직접 URL → Jina 바로 시도
             if "SMM" in article.get("source", "") or "news.google.com" not in link:
                 body = fetch_body(link)
                 if body:
                     article["body"] = body
-                    print(f"  ✅ Jina 직접 성공 ({len(body)}자)")
-                    continue
+                    print(f"  ✅ 직접 Jina ({len(body)}자)")
+                continue
 
-            # 구글뉴스 CBM URL → Playwright로 실제 URL 추출
+            # 구글뉴스 CBM → Playwright로 실제 URL 추출
             real_url = await get_real_url(page, link)
             if real_url:
-                print(f"  ✅ 실제 URL: {real_url[:80]}")
                 body = fetch_body(real_url)
                 article["body"] = body
                 article["real_url"] = real_url
-                print(f"  ✅ 본문 {len(body)}자 추출")
+                print(f"  ✅ {real_url[:60]} ({len(body)}자)")
             else:
-                print(f"  ⚠️ 리다이렉트 실패 — 스니펫 사용")
+                print(f"  ⚠️ 스니펫 사용")
 
         await browser.close()
 
@@ -232,15 +242,16 @@ async def enrich_articles(articles):
 # Gemini 분석
 # ============================================================
 def analyze(articles):
-    today = datetime.now().strftime("%Y년 %m월 %d일")
+    today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     article_list = []
     for i, a in enumerate(articles):
-        line = f"{i+1}. [{a['lang'].upper()}] {a['title']} | 출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}"
+        line = (f"{i+1}. [{a['lang'].upper()}] {a['title']} | "
+                f"출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
-            line += f"\n   [본문]: {body[:800]}"
+            line += f"\n   [본문]: {body[:400]}"
         article_list.append(line)
 
     prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
@@ -270,7 +281,7 @@ def analyze(articles):
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
 - '우리는' 또는 '성일하이텍은'으로 시작
 
-[출력: JSON만]
+[출력: JSON만. {{ 로 시작 }} 로 끝]
 {{
   "articles": [{{
     "title": "원문 제목",
@@ -287,12 +298,23 @@ def analyze(articles):
 
 articles 6~8건(SMM Metal 최소 1건). trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    raw = re.sub(r'```json|```', '', raw).strip()
-    s, e = raw.index('{'), raw.rindex('}')
-    return json.loads(raw[s:e+1])
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    for attempt in range(3):
+        try:
+            time.sleep(6)  # RPM 관리
+            response = model.generate_content(prompt)
+            raw = response.text.strip()
+            raw = re.sub(r'```json|```', '', raw).strip()
+            s, e = raw.index('{'), raw.rindex('}')
+            return json.loads(raw[s:e+1])
+        except Exception as ex:
+            print(f"Gemini 오류 (시도 {attempt+1}/3): {ex}")
+            if attempt < 2:
+                wait = 30 * (attempt + 1)
+                print(f"{wait}초 대기 후 재시도...")
+                time.sleep(wait)
+
+    raise Exception("Gemini 분석 3회 모두 실패")
 
 # ============================================================
 # 이메일 HTML 생성
@@ -307,24 +329,25 @@ def build_email(data):
         by_tag.setdefault(tag, []).append(a)
 
     def card(a):
-        summary = a.get("summary","").replace('\n','<br>')
+        summary = esc(a.get("summary", "")).replace('\n', '<br>')
         return f"""
         <div style="border:1px solid #e0e4ea;border-radius:6px;padding:14px 16px;margin-bottom:12px;background:#fff;">
           <p style="font-size:14px;font-weight:700;color:#0f2744;margin:0 0 3px;">
-            <a href="{a.get('link','')}" style="color:#0f2744;text-decoration:none;">{a.get('title','')}</a>
+            <a href="{esc(a.get('link',''))}" style="color:#0f2744;text-decoration:none;">{esc(a.get('title',''))}</a>
           </p>
-          <p style="font-size:11px;color:#94a3b8;margin:0 0 8px;">{a.get('source','')} · {a.get('date','')}</p>
+          <p style="font-size:11px;color:#94a3b8;margin:0 0 8px;">{esc(a.get('source',''))} · {esc(a.get('date',''))}</p>
           <p style="font-size:13px;color:#374151;line-height:1.75;margin:0 0 10px;">{summary}</p>
-          <span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;background:#dcfce7;color:#15803d;margin-right:5px;">{a.get('region','')}</span>
-          <a href="{a.get('link','')}" style="font-size:11px;color:#ea580c;text-decoration:none;border:1px solid #fdba74;border-radius:10px;padding:2px 9px;">원문 보기</a>
+          <span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;background:#dcfce7;color:#15803d;margin-right:5px;">{esc(a.get('region',''))}</span>
+          <a href="{esc(a.get('link',''))}" style="font-size:11px;color:#ea580c;text-decoration:none;border:1px solid #fdba74;border-radius:10px;padding:2px 9px;">원문 보기</a>
         </div>"""
 
     articles_html = ""
     first = True
     for tag in TAG_ORDER:
-        if tag not in by_tag: continue
+        if tag not in by_tag:
+            continue
         mt = "margin-top:0;" if first else ""
-        articles_html += f'<p style="font-size:13px;font-weight:700;color:#1a3a5c;{mt}margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #cbd5e1;">[ {tag} ]</p>'
+        articles_html += f'<p style="font-size:13px;font-weight:700;color:#1a3a5c;{mt}margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #cbd5e1;">[ {esc(tag)} ]</p>'
         first = False
         for a in by_tag[tag]:
             articles_html += card(a)
@@ -334,33 +357,38 @@ def build_email(data):
         trends_html += f"""
         <div style="border-left:3px solid #2563eb;padding:10px 14px;margin-bottom:12px;background:#f0f5ff;">
           <p style="font-size:11px;font-weight:700;color:#2563eb;margin:0 0 3px;">TREND 0{i+1}</p>
-          <p style="font-size:13px;font-weight:700;color:#0f2744;margin:0 0 5px;">{t.get('title','')}</p>
-          <p style="font-size:13px;color:#374151;line-height:1.75;margin:0;">{t.get('body','')}</p>
+          <p style="font-size:13px;font-weight:700;color:#0f2744;margin:0 0 5px;">{esc(t.get('title',''))}</p>
+          <p style="font-size:13px;color:#374151;line-height:1.75;margin:0;">{esc(t.get('body',''))}</p>
         </div>"""
 
     insights_html = ""
     insights = data.get("insights", [])
     for i, ins in enumerate(insights):
-        bb = "border-bottom:1px solid #fef3c7;" if i < len(insights)-1 else ""
-        insights_html += f'<div style="font-size:13px;color:#374151;line-height:1.75;padding:5px 0;{bb}"><span style="color:#d97706;font-weight:700;margin-right:6px;">&#9658;</span>{ins}</div>'
+        bb = "border-bottom:1px solid #fef3c7;" if i < len(insights) - 1 else ""
+        insights_html += (
+            f'<div style="font-size:13px;color:#374151;line-height:1.75;padding:5px 0;{bb}">'
+            f'<span style="color:#d97706;font-weight:700;margin-right:6px;">&#9658;</span>'
+            f'{esc(ins)}</div>'
+        )
 
-    return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"></head>
+    return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
 <body style="margin:0;padding:16px;background:#eef0f3;">
-<div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic',Arial,sans-serif;">
+<div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic','맑은 고딕',Arial,sans-serif;">
   <div style="background:#0f2744;padding:22px 28px;">
     <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
-    <p style="color:#90b4d8;font-size:12px;margin:0;">{today} | Battery Intelligence Report</p>
+    <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
-  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 / 분야별 핵심 기사</div>
+  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{articles_html}</div>
-  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 2 / 오늘의 산업 흐름</div>
+  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 2 &nbsp;/&nbsp; 오늘의 산업 흐름</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{trends_html}</div>
-  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 3 / 재활용 사업자 관점 시사점</div>
+  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 3 &nbsp;/&nbsp; 재활용 사업자 관점 시사점</div>
   <div style="padding:16px 28px 20px;background:#f5f6f8;">
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">{insights_html}</div>
   </div>
   <div style="background:#0f2744;padding:14px 28px;text-align:center;">
-    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief | {today}</p>
+    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
     <p style="color:#7ea8d4;font-size:10px;margin:5px 0 0;">(c) Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
   </div>
 </div>
@@ -373,8 +401,8 @@ def send_email(html_body):
     today = datetime.now().strftime("%Y년 %m월 %d일")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
-    msg["From"] = GMAIL_USER
-    msg["To"] = TO_EMAIL
+    msg["From"]    = GMAIL_USER
+    msg["To"]      = TO_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
@@ -392,8 +420,8 @@ async def main():
         print("기사 없음 - 종료")
         return
     articles = await enrich_articles(articles)
-    data = analyze(articles)
-    html = build_email(data)
+    data     = analyze(articles)
+    html     = build_email(data)
     send_email(html)
     print("=== 완료 ===")
 
