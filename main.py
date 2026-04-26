@@ -182,7 +182,6 @@ def collect_rss():
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
 
-                # 화이트리스트 (SMM 제외)
                 if source != "SMM Metal":
                     if not any(w in lower_title for w in WHITELIST):
                         continue
@@ -215,7 +214,7 @@ def collect_rss():
     return deduped
 
 # ============================================================
-# Jina로 본문 추출
+# Jina로 본문 추출 (1,000자로 확대)
 # ============================================================
 def fetch_body(real_url):
     try:
@@ -225,19 +224,17 @@ def fetch_body(real_url):
             headers={"User-Agent": "Mozilla/5.0"}
         )
         if resp.status_code == 200:
-            return resp.text[:600]
+            return resp.text[:1000]
     except Exception as e:
         print(f"Jina 오류: {e}")
     return ""
 
 # ============================================================
-# Playwright로 실제 URL 추출 (개선된 버전)
+# Playwright로 실제 URL 추출
 # ============================================================
 async def get_real_url(page, cbm_url):
     try:
-        # commit: 서버 응답 받는 즉시 진행 (networkidle 대기 없음)
         await page.goto(cbm_url, wait_until="commit", timeout=15000)
-        # 구글뉴스 URL에서 벗어날 때까지 최대 10초 대기
         try:
             await page.wait_for_url(
                 lambda url: "news.google.com" not in url,
@@ -279,7 +276,6 @@ async def enrich_articles(articles):
             print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
             link = article["link"]
 
-            # SMM 또는 직접 URL → Jina 바로 시도
             if "SMM" in article.get("source", "") or "news.google.com" not in link:
                 body = fetch_body(link)
                 if body:
@@ -291,7 +287,6 @@ async def enrich_articles(articles):
                     print(f"  ⚠️ Jina 실패 — 스니펫 사용")
                 continue
 
-            # 구글뉴스 CBM → Playwright로 실제 URL 추출 → Jina
             real_url = await get_real_url(page, link)
             if real_url:
                 body = fetch_body(real_url)
@@ -327,7 +322,7 @@ def analyze(articles):
                 f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
-            line += f"\n   [본문]: {body[:500]}"
+            line += f"\n   [본문]: {body[:800]}"
         return line
 
     smm_section     = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
@@ -350,12 +345,14 @@ def analyze(articles):
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
 
-[요약 품질 기준]
-- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약 금지
+[요약 품질 기준 — 가장 중요]
+- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약 절대 금지
 - 기업명은 정식 전체 명칭 사용 (약칭 금지)
 - 협력사·거래 상대방·고객사 이름 반드시 명시
 - 금액·용량·비율·날짜 등 수치는 원문 그대로 기재
 - 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
+- 나쁜 예: "포스코퓨처엠이 글로벌 완성차 업체와 계약을 체결했다"
+- 좋은 예: "포스코퓨처엠(POSCO Future M)이 글로벌 완성차 OEM 1곳과 1조 원 규모 배터리 소재 공급 계약을 체결했다. 계약 기간과 고객사명은 비공개"
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
@@ -369,7 +366,7 @@ def analyze(articles):
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
 - 오늘 기사의 구체적 기업명·수치·정책 직접 언급
 - 자연스러운 한국어 문장으로 작성. 특정 표현으로 시작하도록 강제하지 말 것
-- 좋은 예: "Ascend Elements의 파산은 미국 재활용 시장 전반의 자금조달 환경 악화 신호다. 인디애나 법인 입장에서는 경쟁자 감소 효과가 있지만, 동시에 Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다."
+- 좋은 예: "Ascend Elements의 파산은 미국 재활용 시장 자금조달 환경 악화 신호다. 인디애나 법인 입장에서 경쟁자 감소 효과가 있지만, Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다."
 
 [출력: JSON만. {{ 로 시작 }} 로 끝]
 {{
