@@ -73,7 +73,6 @@ def decode_entities(text):
     return html_lib.unescape(text or "")
 
 def esc(text):
-    """HTML 특수문자 이스케이프"""
     return (str(text or "")
             .replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -81,10 +80,10 @@ def esc(text):
             .replace('"', "&quot;"))
 
 # ============================================================
-# RSS 수집
+# RSS 수집 (24시간)
 # ============================================================
 def collect_rss():
-    cutoff = datetime.utcnow() - timedelta(hours=72)
+    cutoff = datetime.utcnow() - timedelta(hours=24)  # 24시간으로 축소
     raw = []
     seen = set()
 
@@ -93,7 +92,7 @@ def collect_rss():
             if "direct_url" in item:
                 url = item["direct_url"]
             else:
-                q = item["q"] + " when:3d"
+                q = item["q"] + " when:1d"  # 1일로 축소
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
                        f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10")
 
@@ -166,13 +165,13 @@ def collect_rss():
     return deduped
 
 # ============================================================
-# Jina로 본문 추출
+# Jina로 본문 추출 (타임아웃 25초)
 # ============================================================
 def fetch_body(real_url):
     try:
         resp = requests.get(
             f"https://r.jina.ai/{real_url}",
-            timeout=15,
+            timeout=25,
             headers={"User-Agent": "Mozilla/5.0"}
         )
         if resp.status_code == 200:
@@ -195,12 +194,12 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 3건 + 일반 9건 = 최대 12건)
+# 본문 수집 (SMM 최대 5건 우선 + 일반 7건)
 # ============================================================
 async def enrich_articles(articles):
-    smm     = [a for a in articles if "SMM" in a.get("source", "")][:3]
-    general = [a for a in articles if "SMM" not in a.get("source", "")][:9]
-    targets = smm + general
+    smm     = [a for a in articles if "SMM" in a.get("source", "")][:5]
+    general = [a for a in articles if "SMM" not in a.get("source", "")][:7]
+    targets = smm + general  # SMM 먼저, 최대 12건
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -222,6 +221,8 @@ async def enrich_articles(articles):
                 if body:
                     article["body"] = body
                     print(f"  ✅ 직접 Jina ({len(body)}자)")
+                else:
+                    print(f"  ⚠️ Jina 실패 — 스니펫 사용")
                 continue
 
             # 구글뉴스 CBM → Playwright로 실제 URL 추출
@@ -232,16 +233,16 @@ async def enrich_articles(articles):
                 article["real_url"] = real_url
                 print(f"  ✅ {real_url[:60]} ({len(body)}자)")
             else:
-                print(f"  ⚠️ 스니펫 사용")
+                print(f"  ⚠️ 리다이렉트 실패 — 스니펫 사용")
 
         await browser.close()
 
     return targets
 
 # ============================================================
-# Gemini 분석
+# Gemini 분석 (RPM/TPM 안전)
 # ============================================================
-def analyze(articles):
+def analyze(articles, smm_articles):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -254,17 +255,32 @@ def analyze(articles):
             line += f"\n   [본문]: {body[:400]}"
         article_list.append(line)
 
+    # SMM 기사 별도 목록
+    smm_list = []
+    for a in smm_articles:
+        line = f"- {a['title']} | 링크: {a['link']}"
+        body = a.get("body", "") or a.get("snippet", "")
+        if body:
+            line += f"\n  [본문]: {body[:400]}"
+        smm_list.append(line)
+
     prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
 오늘 날짜: {today}
 
-[뉴스 목록]
+[SMM Metal 시황 기사 — 전부 articles에 포함 필수]
+{chr(10).join(smm_list) if smm_list else "없음"}
+
+[일반 뉴스 목록]
 {chr(10).join(article_list)}
 
 [선별 기준]
-- 오늘({today_str}) 또는 어제 기사 최우선
+- 오늘({today_str}) 기사 최우선. 어제 기사는 오늘 기사 부족 시만 포함
+- SMM Metal 출처 기사는 선별 기준 무관하게 전부 articles에 포함
+- 동일 기업·동일 주제 기사는 가장 최신 1건만, 중복 절대 금지
+- 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만 선택
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
-- 출처가 'SMM Metal'인 기사는 무조건 최소 1건 이상 포함
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
+- EV 차량 리뷰·소비전자 제외
 
 [정확도 주의사항]
 - 본문에 구체적 기업명·협력사명·계약 규모·수치가 있으면 반드시 요약에 반영
@@ -279,6 +295,7 @@ def analyze(articles):
 [시사점 4~5개]
 - 성일하이텍: 국내 최대 리튬이온 배터리 재활용. 블랙매스 생산 후 황산니켈·황산코발트·탄산리튬 판매
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
+- 오늘 기사의 구체적 회사명·수치·정책 직접 언급
 - '우리는' 또는 '성일하이텍은'으로 시작
 
 [출력: JSON만. {{ 로 시작 }} 로 끝]
@@ -296,12 +313,12 @@ def analyze(articles):
   "insights": ["시사점"]
 }}
 
-articles 6~8건(SMM Metal 최소 1건). trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
+articles: SMM 전부 + 일반 기사 합산 6~10건. 중복 절대 금지. trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     for attempt in range(3):
         try:
-            time.sleep(6)  # RPM 관리
+            time.sleep(6)  # RPM 관리 (분당 10건 제한)
             response = model.generate_content(prompt)
             raw = response.text.strip()
             raw = re.sub(r'```json|```', '', raw).strip()
@@ -419,9 +436,17 @@ async def main():
     if not articles:
         print("기사 없음 - 종료")
         return
+
+    # SMM 기사 분리 (별도 강제 포함용)
+    smm_articles = [a for a in articles if "SMM" in a.get("source", "")]
+    print(f"SMM 기사: {len(smm_articles)}건")
+
     articles = await enrich_articles(articles)
-    data     = analyze(articles)
-    html     = build_email(data)
+
+    # analyze에 SMM 별도 전달
+    smm_enriched = [a for a in articles if "SMM" in a.get("source", "")]
+    data  = analyze(articles, smm_enriched)
+    html  = build_email(data)
     send_email(html)
     print("=== 완료 ===")
 
