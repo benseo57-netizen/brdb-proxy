@@ -1,40 +1,17 @@
 const express = require('express');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Render 서버에 기본 설치된 Chrome 경로들
-const CHROME_PATHS = [
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/snap/bin/chromium'
-];
-
-async function findChrome() {
-  const fs = require('fs');
-  for (const p of CHROME_PATHS) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
 
 app.get('/decode', async (req, res) => {
   const cbmUrl = req.query.url;
   if (!cbmUrl) return res.status(400).json({ error: 'url 파라미터 필요' });
 
-  const chromePath = await findChrome();
-  if (!chromePath) {
-    return res.status(500).json({ error: 'Chrome 없음', paths: CHROME_PATHS });
-  }
-
   let browser;
   try {
     browser = await puppeteer.launch({
-      executablePath: chromePath,
-      headless: true,
+      headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -64,9 +41,8 @@ app.get('/decode', async (req, res) => {
   }
 });
 
-app.get('/health', async (req, res) => {
-  const chromePath = await findChrome();
-  res.json({ status: 'ok', chrome: chromePath || 'not found' });
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
 });
 
 app.listen(PORT, function() {
