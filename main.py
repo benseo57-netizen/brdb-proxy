@@ -65,7 +65,7 @@ NOISE_SOURCES = [
     "openpr","prnewswire","businesswire","globenewswire","einpresswire",
     "accesswire","prnews","prlog","marketwired","newswire","pr.com","prweb",
     "discoveryalert","bravenewcoin","eurekaalert","cryptoslate","coindesk",
-    "benzinga","seekingalpha","motleyfool","investopedia","indexbox"
+    "benzinga","seekingalpha","motleyfool","investopedia","indexbox", "MSN.com"
 ]
 
 WHITELIST = [
