@@ -1,78 +1,72 @@
 const express = require('express');
-const axios = require('axios');
+const puppeteer = require('puppeteer-core');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Render 서버에 기본 설치된 Chrome 경로들
+const CHROME_PATHS = [
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/snap/bin/chromium'
+];
+
+async function findChrome() {
+  const fs = require('fs');
+  for (const p of CHROME_PATHS) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
 
 app.get('/decode', async (req, res) => {
   const cbmUrl = req.query.url;
   if (!cbmUrl) return res.status(400).json({ error: 'url 파라미터 필요' });
 
+  const chromePath = await findChrome();
+  if (!chromePath) {
+    return res.status(500).json({ error: 'Chrome 없음', paths: CHROME_PATHS });
+  }
+
+  let browser;
   try {
-    const response = await axios.get(cbmUrl, {
-      maxRedirects: 10,
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
-      },
-      validateStatus: () => true
+    browser = await puppeteer.launch({
+      executablePath: chromePath,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--single-process',
+        '--no-zygote'
+      ]
     });
 
-    // axios 리다이렉트 최종 URL 확인
-    const finalUrl = response.request && response.request.res && response.request.res.responseUrl
-      ? response.request.res.responseUrl
-      : null;
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.goto(cbmUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
-    // 유효한 URL인지 확인 (https://로 시작하고 google 도메인 아닌 것)
-    function isValidArticleUrl(url) {
-      if (!url) return false;
-      if (!url.startsWith('http')) return false;
-      if (url.indexOf('news.google.com') > -1) return false;
-      if (url.indexOf('google.com') > -1) return false;
-      return true;
+    const finalUrl = page.url();
+
+    if (finalUrl.indexOf('news.google.com') > -1) {
+      return res.status(422).json({ error: '리다이렉트 실패', finalUrl: finalUrl });
     }
 
-    if (isValidArticleUrl(finalUrl)) {
-      return res.json({ url: finalUrl });
-    }
-
-    // HTML에서 meta refresh 또는 canonical URL 추출
-    const html = typeof response.data === 'string' ? response.data : '';
-
-    // 방법1: meta refresh
-    const metaMatch = html.match(/<meta[^>]+http-equiv="refresh"[^>]+content="[^"]*url=([^"&]+)/i);
-    if (metaMatch && isValidArticleUrl(metaMatch[1])) {
-      return res.json({ url: metaMatch[1] });
-    }
-
-    // 방법2: canonical link
-    const canonicalMatch = html.match(/<link[^>]+rel="canonical"[^>]+href="([^"]+)"/i);
-    if (canonicalMatch && isValidArticleUrl(canonicalMatch[1])) {
-      return res.json({ url: canonicalMatch[1] });
-    }
-
-    // 방법3: og:url
-    const ogMatch = html.match(/<meta[^>]+property="og:url"[^>]+content="([^"]+)"/i);
-    if (ogMatch && isValidArticleUrl(ogMatch[1])) {
-      return res.json({ url: ogMatch[1] });
-    }
-
-    return res.status(422).json({
-      error: '실제 URL 추출 실패',
-      finalUrl: finalUrl,
-      htmlSnippet: html.substring(0, 300)
-    });
+    res.json({ url: finalUrl });
 
   } catch(e) {
     res.status(500).json({ error: e.message });
+  } finally {
+    if (browser) await browser.close();
   }
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get('/health', async (req, res) => {
+  const chromePath = await findChrome();
+  res.json({ status: 'ok', chrome: chromePath || 'not found' });
 });
 
 app.listen(PORT, function() {
