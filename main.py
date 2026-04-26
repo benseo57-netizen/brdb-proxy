@@ -79,22 +79,48 @@ def esc(text):
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
 
+def parse_date(pub_str):
+    if not pub_str:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(pub_str).replace(tzinfo=None)
+    except:
+        pass
+    try:
+        return datetime.fromisoformat(pub_str.replace('Z', ''))
+    except:
+        return None
+
 # ============================================================
-# RSS 수집 (24시간)
+# RSS 수집 — 쿼리는 when:3d, 날짜 필터는 코드에서 언어별 분리
 # ============================================================
 def collect_rss():
-    cutoff = datetime.utcnow() - timedelta(hours=24)  # 24시간으로 축소
+    now = datetime.utcnow()
+    cutoff_24h = now - timedelta(hours=24)
+    cutoff_48h = now - timedelta(hours=48)
+    cutoff_72h = now - timedelta(hours=72)
+
     raw = []
     seen = set()
 
     for item in QUERIES:
+        # 언어별 컷오프 결정
+        if "direct_url" in item:
+            cutoff = cutoff_72h   # SMM: 72시간
+        elif item.get("lang") == "ko":
+            cutoff = cutoff_48h   # 한국어: 48시간
+        else:
+            cutoff = cutoff_24h   # 영/중/일: 24시간
+
         try:
             if "direct_url" in item:
                 url = item["direct_url"]
             else:
-                q = item["q"] + " when:1d"  # 1일로 축소
+                q = item["q"] + " when:3d"  # 구글에서 3일치 가져오고
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
-                       f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10")
+                       f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
+                       f"&cb={int(now.timestamp())}")
 
             resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code != 200:
@@ -112,8 +138,8 @@ def collect_rss():
                     title = re.sub(r'<[^>]+>', '', title)
                     link_el = entry.find("atom:link", ns)
                     link = link_el.get("href", "") if link_el is not None else ""
-                    pub = (entry.findtext("atom:published", "", ns) or
-                           entry.findtext("atom:updated", "", ns))
+                    pub_str = (entry.findtext("atom:published", "", ns) or
+                               entry.findtext("atom:updated", "", ns))
                     source = "SMM Metal"
                     snippet = decode_entities(re.sub(r'<[^>]+>', '', (
                         entry.findtext("atom:summary", "", ns) or
@@ -122,13 +148,18 @@ def collect_rss():
                 else:
                     title = decode_entities((entry.findtext("title") or "").strip())
                     link = (entry.findtext("link") or "").strip()
-                    pub = (entry.findtext("pubDate") or "").strip()
+                    pub_str = (entry.findtext("pubDate") or "").strip()
                     source_el = entry.find("source")
                     source = source_el.text.strip() if source_el is not None else ""
                     snippet = decode_entities(re.sub(r'<[^>]+>', '',
                         entry.findtext("description") or ""))[:200]
 
                 if not title or not link or link in seen:
+                    continue
+
+                # 날짜 필터 — 코드에서 언어별 컷오프 적용
+                pub_date = parse_date(pub_str)
+                if pub_date and pub_date < cutoff:
                     continue
 
                 lower_title  = title.lower()
@@ -143,12 +174,16 @@ def collect_rss():
                 seen.add(link)
                 raw.append({
                     "title": title, "link": link, "source": source,
-                    "pub": pub, "lang": item.get("lang", "en"), "snippet": snippet
+                    "pub": pub_str, "pub_date": pub_date,
+                    "lang": item.get("lang", "en"), "snippet": snippet
                 })
 
             time.sleep(0.12)
         except Exception as e:
             print(f"RSS 오류: {e}")
+
+    # 날짜 최신순 정렬
+    raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
     # 중복 제거
     deduped = []
@@ -161,11 +196,12 @@ def collect_rss():
         if not is_dup:
             deduped.append(a)
 
-    print(f"수집: {len(raw)}건 → 중복 제거 후: {len(deduped)}건")
+    smm_count = sum(1 for a in deduped if "SMM" in a.get("source", ""))
+    print(f"수집: {len(raw)}건 → 중복 제거 후: {len(deduped)}건 (SMM: {smm_count}건)")
     return deduped
 
 # ============================================================
-# Jina로 본문 추출 (타임아웃 25초)
+# Jina로 본문 추출
 # ============================================================
 def fetch_body(real_url):
     try:
@@ -175,7 +211,7 @@ def fetch_body(real_url):
             headers={"User-Agent": "Mozilla/5.0"}
         )
         if resp.status_code == 200:
-            return resp.text[:500]
+            return resp.text[:600]
     except Exception as e:
         print(f"Jina 오류: {e}")
     return ""
@@ -194,12 +230,14 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 최대 5건 우선 + 일반 7건)
+# 본문 수집 (SMM 최대 5건 + 일반 7건 = 최대 12건)
 # ============================================================
 async def enrich_articles(articles):
     smm     = [a for a in articles if "SMM" in a.get("source", "")][:5]
     general = [a for a in articles if "SMM" not in a.get("source", "")][:7]
-    targets = smm + general  # SMM 먼저, 최대 12건
+    targets = smm + general
+
+    print(f"\n본문 추출 대상: SMM {len(smm)}건 + 일반 {len(general)}건 = {len(targets)}건")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -211,8 +249,11 @@ async def enrich_articles(articles):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
 
+        body_success = 0
+        body_snippet = 0
+
         for i, article in enumerate(targets):
-            print(f"[{i+1}/{len(targets)}] {article['title'][:50]}")
+            print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
             link = article["link"]
 
             # SMM 또는 직접 URL → Jina 바로 시도
@@ -220,8 +261,10 @@ async def enrich_articles(articles):
                 body = fetch_body(link)
                 if body:
                     article["body"] = body
+                    body_success += 1
                     print(f"  ✅ 직접 Jina ({len(body)}자)")
                 else:
+                    body_snippet += 1
                     print(f"  ⚠️ Jina 실패 — 스니펫 사용")
                 continue
 
@@ -231,72 +274,81 @@ async def enrich_articles(articles):
                 body = fetch_body(real_url)
                 article["body"] = body
                 article["real_url"] = real_url
-                print(f"  ✅ {real_url[:60]} ({len(body)}자)")
+                if body:
+                    body_success += 1
+                    print(f"  ✅ {real_url[:65]} ({len(body)}자)")
+                else:
+                    body_snippet += 1
+                    print(f"  ⚠️ URL 추출됐으나 본문 없음 — 스니펫 사용")
             else:
+                body_snippet += 1
                 print(f"  ⚠️ 리다이렉트 실패 — 스니펫 사용")
 
         await browser.close()
 
+    print(f"\n본문 추출 결과: 성공 {body_success}건 / 스니펫 대체 {body_snippet}건")
     return targets
 
 # ============================================================
-# Gemini 분석 (RPM/TPM 안전)
+# Gemini 분석
 # ============================================================
-def analyze(articles, smm_articles):
+def analyze(articles):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    article_list = []
-    for i, a in enumerate(articles):
-        line = (f"{i+1}. [{a['lang'].upper()}] {a['title']} | "
-                f"출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
+    # SMM 기사 별도 분리
+    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")]
+    general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
+
+    def format_article(i, a):
+        line = (f"{i+1}. [{a['lang'].upper()}] {a['title']}\n"
+                f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
-            line += f"\n   [본문]: {body[:400]}"
-        article_list.append(line)
+            line += f"\n   [본문]: {body[:500]}"
+        return line
 
-    # SMM 기사 별도 목록
-    smm_list = []
-    for a in smm_articles:
-        line = f"- {a['title']} | 링크: {a['link']}"
-        body = a.get("body", "") or a.get("snippet", "")
-        if body:
-            line += f"\n  [본문]: {body[:400]}"
-        smm_list.append(line)
+    smm_section = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
+    general_section = "\n\n".join(format_article(i, a) for i, a in enumerate(general_articles))
 
-    prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
+    prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 시니어 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
 오늘 날짜: {today}
 
-[SMM Metal 시황 기사 — 전부 articles에 포함 필수]
-{chr(10).join(smm_list) if smm_list else "없음"}
+━━━ [SMM Metal 시황 기사 — 전부 articles에 필수 포함] ━━━
+{smm_section if smm_section else "오늘 SMM 기사 없음"}
 
-[일반 뉴스 목록]
-{chr(10).join(article_list)}
+━━━ [일반 뉴스] ━━━
+{general_section}
 
 [선별 기준]
+- SMM Metal 기사는 내용 무관하게 전부 articles에 포함
 - 오늘({today_str}) 기사 최우선. 어제 기사는 오늘 기사 부족 시만 포함
-- SMM Metal 출처 기사는 선별 기준 무관하게 전부 articles에 포함
-- 동일 기업·동일 주제 기사는 가장 최신 1건만, 중복 절대 금지
-- 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만 선택
+- 동일 기업·동일 주제는 가장 최신 1건만, 중복 절대 금지
+- 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
-- EV 차량 리뷰·소비전자 제외
 
-[정확도 주의사항]
-- 본문에 구체적 기업명·협력사명·계약 규모·수치가 있으면 반드시 요약에 반영
-- 계획 발표 ≠ 실제 시작. 반드시 구분
-- 수치는 원문 그대로 기재
+[요약 품질 기준 — 가장 중요]
+- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약하는 것은 실패
+- 기업명은 반드시 정식 전체 명칭 사용 (약칭 금지)
+- 협력사·거래 상대방·고객사 이름 반드시 명시
+- 금액·용량·비율·날짜 등 수치는 원문 그대로 기재
+- 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
+- 나쁜 예: "포스코퓨처엠이 미국 스타트업과 파트너십을 체결했다"
+- 좋은 예: "포스코퓨처엠(양극재)이 미국 실리콘 음극재 스타트업 Sila Nanotechnologies와 차세대 NCMA 양극재 공동 개발 MOU 체결. 2027년 파일럿 생산 목표"
 
-[트렌드 3개]
+[트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
 - 오늘 기사의 특정 기업명·수치·정책명 직접 인용
-- 금지 패턴: '중요성이 부각된다' 같은 뻔한 결론 절대 금지
+- 이 뉴스 없이는 절대 쓸 수 없는 구체적 내용
+- 금지: '중요성이 부각된다', '필요성이 대두된다' 같은 일반론
 
-[시사점 4~5개]
+[시사점 4~5개 기준]
 - 성일하이텍: 국내 최대 리튬이온 배터리 재활용. 블랙매스 생산 후 황산니켈·황산코발트·탄산리튬 판매
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
-- 오늘 기사의 구체적 회사명·수치·정책 직접 언급
+- 오늘 기사의 구체적 기업명·수치·정책 직접 언급
 - '우리는' 또는 '성일하이텍은'으로 시작
+- 좋은 예: "Ascend Elements가 파산보호 신청했다. 성일하이텍 인디애나 법인 입장에서 미국 현지 경쟁자 1곳이 줄어든 셈이나, 동시에 미국 재활용 시장 전반의 자금조달 환경이 악화되고 있다는 신호이므로 Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다"
 
 [출력: JSON만. {{ 로 시작 }} 로 끝]
 {{
@@ -305,11 +357,11 @@ def analyze(articles, smm_articles):
     "source": "출처",
     "date": "날짜",
     "link": "URL",
-    "summary": "▪ [팩트] 기업명 전체·협력사명·구체적 계약/수치 포함 1~2줄.\\n▪ [밸류체인 영향] 확실한 영향만. 불확실하면 '정보 부족으로 판단 보류'.\\n▪ [체크 포인트] 원문에서 확인할 핵심 변수 1개.",
+    "summary": "▪ [팩트] 기업 정식명칭·협력사명·금액·수치·날짜 포함 1~2줄.\\n▪ [밸류체인 영향] 확실한 영향만. 본문 근거 없으면 '정보 부족으로 판단 보류'.\\n▪ [체크 포인트] 원문에서 반드시 확인해야 할 핵심 변수 1개.",
     "tag": "원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정 중 하나",
     "region": "한국|중국|미국|EU|일본|글로벌"
   }}],
-  "trends": [{{"title": "트렌드 제목", "body": "2~3문장"}}],
+  "trends": [{{"title": "트렌드 제목", "body": "구체적 기업명·수치 포함 2~3문장"}}],
   "insights": ["시사점"]
 }}
 
@@ -318,7 +370,7 @@ articles: SMM 전부 + 일반 기사 합산 6~10건. 중복 절대 금지. trend
     model = genai.GenerativeModel("gemini-2.5-flash")
     for attempt in range(3):
         try:
-            time.sleep(6)  # RPM 관리 (분당 10건 제한)
+            time.sleep(6)  # RPM 관리
             response = model.generate_content(prompt)
             raw = response.text.strip()
             raw = re.sub(r'```json|```', '', raw).strip()
@@ -437,16 +489,9 @@ async def main():
         print("기사 없음 - 종료")
         return
 
-    # SMM 기사 분리 (별도 강제 포함용)
-    smm_articles = [a for a in articles if "SMM" in a.get("source", "")]
-    print(f"SMM 기사: {len(smm_articles)}건")
-
     articles = await enrich_articles(articles)
-
-    # analyze에 SMM 별도 전달
-    smm_enriched = [a for a in articles if "SMM" in a.get("source", "")]
-    data  = analyze(articles, smm_enriched)
-    html  = build_email(data)
+    data     = analyze(articles)
+    html     = build_email(data)
     send_email(html)
     print("=== 완료 ===")
 
