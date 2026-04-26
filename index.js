@@ -9,7 +9,6 @@ app.get('/decode', async (req, res) => {
   if (!cbmUrl) return res.status(400).json({ error: 'url 파라미터 필요' });
 
   try {
-    // 구글 뉴스에 실제 브라우저처럼 요청
     const response = await axios.get(cbmUrl, {
       maxRedirects: 10,
       timeout: 15000,
@@ -17,22 +16,23 @@ app.get('/decode', async (req, res) => {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        'Connection': 'keep-alive'
       },
       validateStatus: () => true
     });
 
-    const finalUrl = response.request?.res?.responseUrl || response.config?.url || cbmUrl;
+    const finalUrl = response.request && response.request.res && response.request.res.responseUrl
+      ? response.request.res.responseUrl
+      : cbmUrl;
 
-    // HTML에서 실제 URL 추출 시도
-    const html = response.data;
+    const html = typeof response.data === 'string' ? response.data : '';
+
     const urlMatch = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/)
       || html.match(/url=([^&"'\s]+)/)
       || html.match(/href="(https?:\/\/(?!.*google)[^"]+)"/);
 
     const extractedUrl = urlMatch ? urlMatch[1] : null;
+
     const resultUrl = (finalUrl && finalUrl.indexOf('news.google.com') === -1)
       ? finalUrl
       : extractedUrl;
@@ -41,7 +41,7 @@ app.get('/decode', async (req, res) => {
       return res.status(422).json({
         error: '실제 URL 추출 실패',
         finalUrl: finalUrl,
-        htmlSnippet: html.substring(0, 500)
+        htmlSnippet: html.substring(0, 300)
       });
     }
 
@@ -56,4 +56,6 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.listen(
+app.listen(PORT, function() {
+  console.log('BRDB Proxy 실행 중: ' + PORT);
+});
