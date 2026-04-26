@@ -108,6 +108,14 @@ def parse_date(pub_str):
     except:
         return None
 
+def extract_real_url(url):
+    """구글 리다이렉트 URL에서 실제 URL 추출"""
+    if "google.com/url" in url:
+        match = re.search(r'[?&]url=([^&]+)', url)
+        if match:
+            return urllib.parse.unquote(match.group(1))
+    return url
+
 # ============================================================
 # RSS 수집
 # ============================================================
@@ -152,6 +160,7 @@ def collect_rss():
                     title = re.sub(r'<[^>]+>', '', title)
                     link_el = entry.find("atom:link", ns)
                     link = link_el.get("href", "") if link_el is not None else ""
+                    link = extract_real_url(link)
                     pub_str = (entry.findtext("atom:published", "", ns) or
                                entry.findtext("atom:updated", "", ns))
                     source = "SMM Metal"
@@ -162,6 +171,7 @@ def collect_rss():
                 else:
                     title = decode_entities((entry.findtext("title") or "").strip())
                     link = (entry.findtext("link") or "").strip()
+                    link = extract_real_url(link)
                     pub_str = (entry.findtext("pubDate") or "").strip()
                     source_el = entry.find("source")
                     source = source_el.text.strip() if source_el is not None else ""
@@ -348,14 +358,14 @@ def analyze(articles):
 
 [요약 작성 기준 — 가장 중요]
 - 3문장 이내 자유 서술형으로 작성
-- 첫 문장: 기업 정식명칭·협력사명·금액·수치·날짜 등 핵심 팩트
-- 둘째 문장: 밸류체인 또는 시장에 미치는 파급력 (본문에 근거 없으면 생략)
-- 셋째 문장: 성일하이텍 관점에서의 의미 — ★억지 연결 절대 금지. 직접적 연관성이 명확할 때만 작성, 불확실하면 생략
-- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약 절대 금지
-- 기업명은 정식 전체 명칭 사용 (약칭 금지), 수치는 원문 그대로 기재
+- 본문에 등장하는 기관명·기업명·금액·수치·날짜는 빠짐없이 반영 (이것이 최우선)
+- 수치 없이 "~할 것으로 전망된다" 같은 추상적 요약 절대 금지
+- 기업명은 정식 전체 명칭 사용 (약칭 금지)
 - 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
-- 나쁜 예: "포스코퓨처엠이 글로벌 완성차 업체와 계약을 체결했다."
-- 좋은 예: "포스코퓨처엠(POSCO Future M)이 글로벌 완성차 OEM 1곳과 합성 흑연 음극재 공급 계약(1조 원, 2027~2032년)을 체결했다. 베트남 생산 거점(3,570억 원 투자)과 연계된 패키지 딜로 고객사명은 비공개다. 음극재 공급망의 중국 의존 탈피 흐름 속에서 성일하이텍 블랙매스 수요처 다양화 관점에서 주목할 만하다."
+- 성일하이텍 관점은 강제하지 않음. 직접적 연관성이 명확할 때만 자연스럽게 언급
+- 나쁜 예: "리튬 시장이 공급 부족 국면에 진입할 것으로 전망된다."
+- 좋은 예: "Canaccord Genuity는 2026~2035년 구조적 리튬 공급부족을 경고했고, Morgan Stanley는 LCE 8만 톤, UBS는 2만 2천 톤 부족을 추정했다. 탄산리튬 현물가는 4월 23일 기준 1kg당 20.29달러로 연초 대비 2배 이상 반등했다."
+- 좋은 예2: "포스코퓨처엠(POSCO Future M)이 베트남 타이응웬성에서 IRC를 획득하고 3,570억 원을 투자해 2028년 인조흑연 음극재 양산을 목표로 한다. 이 시설은 지난해 10월 글로벌 완성차사와 체결한 6,710억 원 천연흑연 음극재 계약 및 올해 3월 체결한 1조 149억 원 인조흑연 음극재 계약 이행을 위한 생산 거점이다."
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
@@ -376,7 +386,7 @@ def analyze(articles):
     "source": "출처",
     "date": "날짜",
     "link": "URL",
-    "summary": "팩트→영향→(선택)성일하이텍 관점 순서의 자유 서술 요약.",
+    "summary": "본문 수치·기관명·기업명 필수 반영, 3문장 이내 자유 서술.",
     "tag": "원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정 중 하나",
     "region": "한국|중국|미국|EU|일본|글로벌"
   }}],
