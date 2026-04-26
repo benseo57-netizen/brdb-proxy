@@ -50,14 +50,14 @@ QUERIES = [
     {"q": '("パナソニック" OR "トヨタ") ("電池リサイクル" OR "回収")', "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
     {"q": '("硫酸镍" OR "硫酸钴" OR "碳酸锂") ("价格" OR "现货")', "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
     {"q": '"动力电池回收" ("政策" OR "标准")', "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-    {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/9793158246760815124", "lang": "en"},
+    {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879", "lang": "en"},
 ]
 
 NOISE_KEYWORDS = [
     "crypto","bitcoin","ethereum","nft","dogecoin","게임","영화","드라마","리뷰",
     "car review","smartphone review","stock tip","smartwatch","battery etf",
     "lithium etf","목표가 상향","목표가 하향","투자의견","eurekaalert","전자폐기물",
-    "cassava","agriculture","crop","petro","petroleum","oil refin","reliance industries",
+    "cassava","agriculture","crop","petro","petroleum","oil refin",
     "dow jones","s&p 500","nasdaq"
 ]
 
@@ -68,7 +68,6 @@ NOISE_SOURCES = [
     "benzinga","seekingalpha","motleyfool","investopedia","indexbox"
 ]
 
-# 화이트리스트 — 이 중 하나라도 있어야 통과 (SMM 기사 제외)
 WHITELIST = [
     "battery","배터리","전지","lithium","리튬","nickel","니켈","cobalt","코발트",
     "black mass","블랙매스","recycl","재활용","폐배터리","cathode","양극재",
@@ -120,17 +119,13 @@ def collect_rss():
 
     for item in QUERIES:
         is_smm = "direct_url" in item
-
-        # 컷오프: SMM 72h, 그 외 48h
         cutoff = cutoff_72h if is_smm else cutoff_48h
 
         try:
             if is_smm:
                 url = item["direct_url"]
-                # SMM 피드 디버그
                 resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
                 print(f"SMM 피드 응답코드: {resp.status_code}")
-                print(f"SMM 피드 앞 500자: {resp.text[:500]}")
                 if resp.status_code != 200:
                     continue
                 root = ET.fromstring(resp.content)
@@ -174,7 +169,6 @@ def collect_rss():
                 if not title or not link or link in seen:
                     continue
 
-                # 날짜 필터
                 pub_date = parse_date(pub_str)
                 if pub_date and pub_date < cutoff:
                     continue
@@ -183,13 +177,12 @@ def collect_rss():
                 lower_source = source.lower()
                 lower_link   = link.lower()
 
-                # 노이즈 필터
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
 
-                # 화이트리스트 필터 (SMM 제외)
+                # 화이트리스트 (SMM 제외)
                 if source != "SMM Metal":
                     if not any(w in lower_title for w in WHITELIST):
                         continue
@@ -203,12 +196,10 @@ def collect_rss():
 
             time.sleep(0.12)
         except Exception as e:
-            print(f"RSS 오류 ({item.get('q', item.get('direct_url', ''))}): {e}")
+            print(f"RSS 오류: {e}")
 
-    # 최신순 정렬
     raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
-    # 중복 제거
     deduped = []
     for a in raw:
         words = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
@@ -240,11 +231,20 @@ def fetch_body(real_url):
     return ""
 
 # ============================================================
-# Playwright로 실제 URL 추출 (domcontentloaded로 변경)
+# Playwright로 실제 URL 추출 (개선된 버전)
 # ============================================================
 async def get_real_url(page, cbm_url):
     try:
-        await page.goto(cbm_url, wait_until="domcontentloaded", timeout=15000)
+        # commit: 서버 응답 받는 즉시 진행 (networkidle 대기 없음)
+        await page.goto(cbm_url, wait_until="commit", timeout=15000)
+        # 구글뉴스 URL에서 벗어날 때까지 최대 10초 대기
+        try:
+            await page.wait_for_url(
+                lambda url: "news.google.com" not in url,
+                timeout=10000
+            )
+        except:
+            pass
         final_url = page.url
         if "news.google.com" not in final_url:
             return final_url
@@ -279,6 +279,7 @@ async def enrich_articles(articles):
             print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
             link = article["link"]
 
+            # SMM 또는 직접 URL → Jina 바로 시도
             if "SMM" in article.get("source", "") or "news.google.com" not in link:
                 body = fetch_body(link)
                 if body:
@@ -290,6 +291,7 @@ async def enrich_articles(articles):
                     print(f"  ⚠️ Jina 실패 — 스니펫 사용")
                 continue
 
+            # 구글뉴스 CBM → Playwright로 실제 URL 추출 → Jina
             real_url = await get_real_url(page, link)
             if real_url:
                 body = fetch_body(real_url)
@@ -366,7 +368,7 @@ def analyze(articles):
 - 성일하이텍: 국내 최대 리튬이온 배터리 재활용. 블랙매스 생산 후 황산니켈·황산코발트·탄산리튬 판매
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
 - 오늘 기사의 구체적 기업명·수치·정책 직접 언급
-- 자연스러운 한국어 문장으로 작성. '우리는', '성일하이텍은' 같은 표현으로 시작하지 말 것
+- 자연스러운 한국어 문장으로 작성. 특정 표현으로 시작하도록 강제하지 말 것
 - 좋은 예: "Ascend Elements의 파산은 미국 재활용 시장 전반의 자금조달 환경 악화 신호다. 인디애나 법인 입장에서는 경쟁자 감소 효과가 있지만, 동시에 Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다."
 
 [출력: JSON만. {{ 로 시작 }} 로 끝]
