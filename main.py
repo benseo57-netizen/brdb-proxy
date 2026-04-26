@@ -56,14 +56,29 @@ QUERIES = [
 NOISE_KEYWORDS = [
     "crypto","bitcoin","ethereum","nft","dogecoin","게임","영화","드라마","리뷰",
     "car review","smartphone review","stock tip","smartwatch","battery etf",
-    "lithium etf","목표가 상향","목표가 하향","투자의견","eurekaalert","전자폐기물"
+    "lithium etf","목표가 상향","목표가 하향","투자의견","eurekaalert","전자폐기물",
+    "cassava","agriculture","crop","petro","petroleum","oil refin","reliance industries",
+    "dow jones","s&p 500","nasdaq"
 ]
 
 NOISE_SOURCES = [
     "openpr","prnewswire","businesswire","globenewswire","einpresswire",
     "accesswire","prnews","prlog","marketwired","newswire","pr.com","prweb",
     "discoveryalert","bravenewcoin","eurekaalert","cryptoslate","coindesk",
-    "benzinga","seekingalpha","motleyfool","investopedia"
+    "benzinga","seekingalpha","motleyfool","investopedia","indexbox"
+]
+
+# 화이트리스트 — 이 중 하나라도 있어야 통과 (SMM 기사 제외)
+WHITELIST = [
+    "battery","배터리","전지","lithium","리튬","nickel","니켈","cobalt","코발트",
+    "black mass","블랙매스","recycl","재활용","폐배터리","cathode","양극재",
+    "precursor","전구체","anode","electrolyte","feedstock","scrap","스크랩",
+    "황산니켈","황산코발트","탄산리튬","수산화리튬","nickel sulfate","cobalt sulfate",
+    "lithium carbonate","lithium hydroxide","gigafactory","kwh","mwh","ev ",
+    "electric vehicle","ascend","redwood","cirba","ecobat","li-cycle","umicore",
+    "glencore","catl","byd","lges","samsung sdi","sk on","panasonic","northvolt",
+    "albemarle","sqm","ganfeng","tianqi","성일하이텍","에코프로","포스코퓨처엠",
+    "电池","回收","锂","镍","钴","リサイクル","電池","リチウム","ニッケル","コバルト"
 ]
 
 # ============================================================
@@ -88,16 +103,15 @@ def parse_date(pub_str):
     except:
         pass
     try:
-        return datetime.fromisoformat(pub_str.replace('Z', ''))
+        return datetime.fromisoformat(pub_str.replace('Z', '').replace('+00:00', ''))
     except:
         return None
 
 # ============================================================
-# RSS 수집 — 쿼리는 when:3d, 날짜 필터는 코드에서 언어별 분리
+# RSS 수집
 # ============================================================
 def collect_rss():
     now = datetime.utcnow()
-    cutoff_24h = now - timedelta(hours=24)
     cutoff_48h = now - timedelta(hours=48)
     cutoff_72h = now - timedelta(hours=72)
 
@@ -105,28 +119,31 @@ def collect_rss():
     seen = set()
 
     for item in QUERIES:
-        # 언어별 컷오프 결정
-        if "direct_url" in item:
-            cutoff = cutoff_72h   # SMM: 72시간
-        elif item.get("lang") == "ko":
-            cutoff = cutoff_48h   # 한국어: 48시간
-        else:
-            cutoff = cutoff_24h   # 영/중/일: 24시간
+        is_smm = "direct_url" in item
+
+        # 컷오프: SMM 72h, 그 외 48h
+        cutoff = cutoff_72h if is_smm else cutoff_48h
 
         try:
-            if "direct_url" in item:
+            if is_smm:
                 url = item["direct_url"]
+                # SMM 피드 디버그
+                resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                print(f"SMM 피드 응답코드: {resp.status_code}")
+                print(f"SMM 피드 앞 500자: {resp.text[:500]}")
+                if resp.status_code != 200:
+                    continue
+                root = ET.fromstring(resp.content)
             else:
-                q = item["q"] + " when:3d"  # 구글에서 3일치 가져오고
+                q = item["q"] + " when:3d"
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
                        f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
                        f"&cb={int(now.timestamp())}")
+                resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    continue
+                root = ET.fromstring(resp.content)
 
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code != 200:
-                continue
-
-            root = ET.fromstring(resp.content)
             ns = {"atom": "http://www.w3.org/2005/Atom"}
             is_atom = root.tag.endswith("feed")
             entries = root.findall(".//atom:entry", ns) if is_atom else root.findall(".//item")
@@ -157,7 +174,7 @@ def collect_rss():
                 if not title or not link or link in seen:
                     continue
 
-                # 날짜 필터 — 코드에서 언어별 컷오프 적용
+                # 날짜 필터
                 pub_date = parse_date(pub_str)
                 if pub_date and pub_date < cutoff:
                     continue
@@ -166,10 +183,16 @@ def collect_rss():
                 lower_source = source.lower()
                 lower_link   = link.lower()
 
+                # 노이즈 필터
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
+
+                # 화이트리스트 필터 (SMM 제외)
+                if source != "SMM Metal":
+                    if not any(w in lower_title for w in WHITELIST):
+                        continue
 
                 seen.add(link)
                 raw.append({
@@ -180,9 +203,9 @@ def collect_rss():
 
             time.sleep(0.12)
         except Exception as e:
-            print(f"RSS 오류: {e}")
+            print(f"RSS 오류 ({item.get('q', item.get('direct_url', ''))}): {e}")
 
-    # 날짜 최신순 정렬
+    # 최신순 정렬
     raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
     # 중복 제거
@@ -217,11 +240,11 @@ def fetch_body(real_url):
     return ""
 
 # ============================================================
-# Playwright로 실제 URL 추출
+# Playwright로 실제 URL 추출 (domcontentloaded로 변경)
 # ============================================================
 async def get_real_url(page, cbm_url):
     try:
-        await page.goto(cbm_url, wait_until="networkidle", timeout=20000)
+        await page.goto(cbm_url, wait_until="domcontentloaded", timeout=15000)
         final_url = page.url
         if "news.google.com" not in final_url:
             return final_url
@@ -230,7 +253,7 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 최대 5건 + 일반 7건 = 최대 12건)
+# 본문 수집 (SMM 최대 5건 + 일반 7건)
 # ============================================================
 async def enrich_articles(articles):
     smm     = [a for a in articles if "SMM" in a.get("source", "")][:5]
@@ -256,7 +279,6 @@ async def enrich_articles(articles):
             print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
             link = article["link"]
 
-            # SMM 또는 직접 URL → Jina 바로 시도
             if "SMM" in article.get("source", "") or "news.google.com" not in link:
                 body = fetch_body(link)
                 if body:
@@ -268,7 +290,6 @@ async def enrich_articles(articles):
                     print(f"  ⚠️ Jina 실패 — 스니펫 사용")
                 continue
 
-            # 구글뉴스 CBM → Playwright로 실제 URL 추출
             real_url = await get_real_url(page, link)
             if real_url:
                 body = fetch_body(real_url)
@@ -296,7 +317,6 @@ def analyze(articles):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # SMM 기사 별도 분리
     smm_articles     = [a for a in articles if "SMM" in a.get("source", "")]
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
@@ -308,7 +328,7 @@ def analyze(articles):
             line += f"\n   [본문]: {body[:500]}"
         return line
 
-    smm_section = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
+    smm_section     = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
     general_section = "\n\n".join(format_article(i, a) for i, a in enumerate(general_articles))
 
     prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 시니어 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
@@ -328,27 +348,26 @@ def analyze(articles):
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
 
-[요약 품질 기준 — 가장 중요]
-- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약하는 것은 실패
-- 기업명은 반드시 정식 전체 명칭 사용 (약칭 금지)
+[요약 품질 기준]
+- [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약 금지
+- 기업명은 정식 전체 명칭 사용 (약칭 금지)
 - 협력사·거래 상대방·고객사 이름 반드시 명시
 - 금액·용량·비율·날짜 등 수치는 원문 그대로 기재
 - 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
-- 나쁜 예: "포스코퓨처엠이 미국 스타트업과 파트너십을 체결했다"
-- 좋은 예: "포스코퓨처엠(양극재)이 미국 실리콘 음극재 스타트업 Sila Nanotechnologies와 차세대 NCMA 양극재 공동 개발 MOU 체결. 2027년 파일럿 생산 목표"
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
 - 오늘 기사의 특정 기업명·수치·정책명 직접 인용
-- 이 뉴스 없이는 절대 쓸 수 없는 구체적 내용
+- 이 뉴스 없이는 쓸 수 없는 구체적 내용
 - 금지: '중요성이 부각된다', '필요성이 대두된다' 같은 일반론
 
 [시사점 4~5개 기준]
+- 성일하이텍 관점에서 오늘 뉴스가 가지는 의미를 분석
 - 성일하이텍: 국내 최대 리튬이온 배터리 재활용. 블랙매스 생산 후 황산니켈·황산코발트·탄산리튬 판매
 - 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
 - 오늘 기사의 구체적 기업명·수치·정책 직접 언급
-- '우리는' 또는 '성일하이텍은'으로 시작
-- 좋은 예: "Ascend Elements가 파산보호 신청했다. 성일하이텍 인디애나 법인 입장에서 미국 현지 경쟁자 1곳이 줄어든 셈이나, 동시에 미국 재활용 시장 전반의 자금조달 환경이 악화되고 있다는 신호이므로 Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다"
+- 자연스러운 한국어 문장으로 작성. '우리는', '성일하이텍은' 같은 표현으로 시작하지 말 것
+- 좋은 예: "Ascend Elements의 파산은 미국 재활용 시장 전반의 자금조달 환경 악화 신호다. 인디애나 법인 입장에서는 경쟁자 감소 효과가 있지만, 동시에 Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다."
 
 [출력: JSON만. {{ 로 시작 }} 로 끝]
 {{
@@ -370,7 +389,7 @@ articles: SMM 전부 + 일반 기사 합산 6~10건. 중복 절대 금지. trend
     model = genai.GenerativeModel("gemini-2.5-flash")
     for attempt in range(3):
         try:
-            time.sleep(6)  # RPM 관리
+            time.sleep(6)
             response = model.generate_content(prompt)
             raw = response.text.strip()
             raw = re.sub(r'```json|```', '', raw).strip()
