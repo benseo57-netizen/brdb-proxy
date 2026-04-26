@@ -19,6 +19,7 @@ GEMINI_API_KEY = os.environ['GEMINI_API_KEY']
 GMAIL_USER     = os.environ['GMAIL_USER']
 GMAIL_APP_PASS = os.environ['GMAIL_APP_PASSWORD']
 TO_EMAIL       = os.environ['TO_EMAIL']
+BCC_EMAIL      = os.environ.get('BCC_EMAIL', '')
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -65,7 +66,8 @@ NOISE_SOURCES = [
     "openpr","prnewswire","businesswire","globenewswire","einpresswire",
     "accesswire","prnews","prlog","marketwired","newswire","pr.com","prweb",
     "discoveryalert","bravenewcoin","eurekaalert","cryptoslate","coindesk",
-    "benzinga","seekingalpha","motleyfool","investopedia","indexbox", "MSN.com"
+    "benzinga","seekingalpha","motleyfool","investopedia","indexbox",
+    "msn","msn.com",
 ]
 
 WHITELIST = [
@@ -214,7 +216,7 @@ def collect_rss():
     return deduped
 
 # ============================================================
-# Jina로 본문 추출 (1,000자로 확대)
+# Jina로 본문 추출 (3,000자)
 # ============================================================
 def fetch_body(real_url):
     try:
@@ -224,7 +226,7 @@ def fetch_body(real_url):
             headers={"User-Agent": "Mozilla/5.0"}
         )
         if resp.status_code == 200:
-            return resp.text[:1000]
+            return resp.text[:3000]
     except Exception as e:
         print(f"Jina 오류: {e}")
     return ""
@@ -250,11 +252,11 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 최대 5건 + 일반 7건)
+# 본문 수집 (SMM 최대 2건 + 일반 9건)
 # ============================================================
 async def enrich_articles(articles):
-    smm     = [a for a in articles if "SMM" in a.get("source", "")][:5]
-    general = [a for a in articles if "SMM" not in a.get("source", "")][:7]
+    smm     = [a for a in articles if "SMM" in a.get("source", "")][:2]
+    general = [a for a in articles if "SMM" not in a.get("source", "")][:9]
     targets = smm + general
 
     print(f"\n본문 추출 대상: SMM {len(smm)}건 + 일반 {len(general)}건 = {len(targets)}건")
@@ -314,7 +316,7 @@ def analyze(articles):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")]
+    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")][:2]
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
     def format_article(i, a):
@@ -322,7 +324,7 @@ def analyze(articles):
                 f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
-            line += f"\n   [본문]: {body[:800]}"
+            line += f"\n   [본문]: {body[:2000]}"
         return line
 
     smm_section     = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
@@ -331,28 +333,29 @@ def analyze(articles):
     prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 시니어 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
 오늘 날짜: {today}
 
-━━━ [SMM Metal 시황 기사 — 전부 articles에 필수 포함] ━━━
+━━━ [SMM Metal 시황 기사 — 최우선 포함, 최대 2건] ━━━
 {smm_section if smm_section else "오늘 SMM 기사 없음"}
 
 ━━━ [일반 뉴스] ━━━
 {general_section}
 
 [선별 기준]
-- SMM Metal 기사는 내용 무관하게 전부 articles에 포함
 - 오늘({today_str}) 기사 최우선. 어제 기사는 오늘 기사 부족 시만 포함
 - 동일 기업·동일 주제는 가장 최신 1건만, 중복 절대 금지
 - 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
 
-[요약 품질 기준 — 가장 중요]
+[요약 작성 기준 — 가장 중요]
+- 3문장 이내 자유 서술형으로 작성
+- 첫 문장: 기업 정식명칭·협력사명·금액·수치·날짜 등 핵심 팩트
+- 둘째 문장: 밸류체인 또는 시장에 미치는 파급력 (본문에 근거 없으면 생략)
+- 셋째 문장: 성일하이텍 관점에서의 의미 — ★억지 연결 절대 금지. 직접적 연관성이 명확할 때만 작성, 불확실하면 생략
 - [본문] 데이터가 있으면 반드시 활용. 제목만 보고 요약 절대 금지
-- 기업명은 정식 전체 명칭 사용 (약칭 금지)
-- 협력사·거래 상대방·고객사 이름 반드시 명시
-- 금액·용량·비율·날짜 등 수치는 원문 그대로 기재
+- 기업명은 정식 전체 명칭 사용 (약칭 금지), 수치는 원문 그대로 기재
 - 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
-- 나쁜 예: "포스코퓨처엠이 글로벌 완성차 업체와 계약을 체결했다"
-- 좋은 예: "포스코퓨처엠(POSCO Future M)이 글로벌 완성차 OEM 1곳과 1조 원 규모 배터리 소재 공급 계약을 체결했다. 계약 기간과 고객사명은 비공개"
+- 나쁜 예: "포스코퓨처엠이 글로벌 완성차 업체와 계약을 체결했다."
+- 좋은 예: "포스코퓨처엠(POSCO Future M)이 글로벌 완성차 OEM 1곳과 합성 흑연 음극재 공급 계약(1조 원, 2027~2032년)을 체결했다. 베트남 생산 거점(3,570억 원 투자)과 연계된 패키지 딜로 고객사명은 비공개다. 음극재 공급망의 중국 의존 탈피 흐름 속에서 성일하이텍 블랙매스 수요처 다양화 관점에서 주목할 만하다."
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
@@ -361,39 +364,42 @@ def analyze(articles):
 - 금지: '중요성이 부각된다', '필요성이 대두된다' 같은 일반론
 
 [시사점 4~5개 기준]
-- 성일하이텍 관점에서 오늘 뉴스가 가지는 의미를 분석
-- 성일하이텍: 국내 최대 리튬이온 배터리 재활용. 블랙매스 생산 후 황산니켈·황산코발트·탄산리튬 판매
-- 해외 법인: 미국(인디애나), 폴란드, 헝가리, 인도, 말레이시아, 중국
+- 성일하이텍(국내 최대 배터리 재활용, 블랙매스 생산 및 황산니켈·황산코발트·탄산리튬 판매) 관점
+- 해외 법인(미국 인디애나, 폴란드, 헝가리, 인도, 말레이시아, 중국) 연계 검토
 - 오늘 기사의 구체적 기업명·수치·정책 직접 언급
-- 자연스러운 한국어 문장으로 작성. 특정 표현으로 시작하도록 강제하지 말 것
-- 좋은 예: "Ascend Elements의 파산은 미국 재활용 시장 자금조달 환경 악화 신호다. 인디애나 법인 입장에서 경쟁자 감소 효과가 있지만, Mitsui JV 투자 협상에서 이 리스크를 명시적으로 논의해야 한다."
+- 자연스러운 한국어 문장으로 작성
 
-[출력: JSON만. {{ 로 시작 }} 로 끝]
+[출력: JSON만]
 {{
   "articles": [{{
     "title": "원문 제목",
     "source": "출처",
     "date": "날짜",
     "link": "URL",
-    "summary": "▪ [팩트] 기업 정식명칭·협력사명·금액·수치·날짜 포함 1~2줄.\\n▪ [밸류체인 영향] 확실한 영향만. 본문 근거 없으면 '정보 부족으로 판단 보류'.\\n▪ [체크 포인트] 원문에서 반드시 확인해야 할 핵심 변수 1개.",
+    "summary": "팩트→영향→(선택)성일하이텍 관점 순서의 자유 서술 요약.",
     "tag": "원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정 중 하나",
     "region": "한국|중국|미국|EU|일본|글로벌"
   }}],
-  "trends": [{{"title": "트렌드 제목", "body": "구체적 기업명·수치 포함 2~3문장"}}],
+  "trends": [{{"title": "트렌드 제목", "body": "구체적 내용 2~3문장"}}],
   "insights": ["시사점"]
 }}
 
-articles: SMM 전부 + 일반 기사 합산 6~10건. 중복 절대 금지. trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
+articles: SMM 최대 2건 + 일반 기사 합산 총 6~8건. trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
+    generation_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.2
+    )
+
     for attempt in range(3):
         try:
             time.sleep(6)
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
-            raw = re.sub(r'```json|```', '', raw).strip()
-            s, e = raw.index('{'), raw.rindex('}')
-            return json.loads(raw[s:e+1])
+            response = model.generate_content(
+                prompt,
+                generation_config=generation_config
+            )
+            return json.loads(response.text)
         except Exception as ex:
             print(f"Gemini 오류 (시도 {attempt+1}/3): {ex}")
             if attempt < 2:
@@ -490,11 +496,14 @@ def send_email(html_body):
     msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
+    if BCC_EMAIL:
+        msg["Bcc"] = BCC_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_APP_PASS)
-        smtp.sendmail(GMAIL_USER, TO_EMAIL, msg.as_string())
+        recipients = [TO_EMAIL] + ([BCC_EMAIL] if BCC_EMAIL else [])
+        smtp.sendmail(GMAIL_USER, recipients, msg.as_string())
     print(f"발송 완료 → {TO_EMAIL}")
 
 # ============================================================
