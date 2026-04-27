@@ -506,8 +506,7 @@ def send_email(html_body):
     msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
-    if BCC_EMAIL:
-        msg["Bcc"] = BCC_EMAIL
+    # Bcc 헤더 없음 — sendmail recipients에만 추가
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
