@@ -25,202 +25,302 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # ============================================================
 # RSS 쿼리
+# 설계 원칙:
+#   - 카테고리(A~J)별로 구분, 각 카테고리는 해당 기업/주제 기사를 폭넓게 수집
+#   - 셀제조사는 두 번째 조건 없이 기업명만으로 수집 (NOISE 필터가 걸러냄)
+#   - 한국어 / 영어 / 중국어 / 일본어 / 인도네시아어 커버
 # ============================================================
 QUERIES = [
-    # ── 국내 기업 ──
-    # 1 — 성일하이텍 직접 모니터링 (한국어)
+
+    # ════════════════════════════════════════
+    # A. 핵심광물 시황
+    # ════════════════════════════════════════
+
+    # A-1. 황산염·탄산염 가격 (한국어)
+    {"q": '("황산니켈" OR "황산코발트" OR "탄산리튬" OR "수산화리튬") ("가격" OR "시황" OR "공급")',
+     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+
+    # A-2. 황산염·탄산염 가격 (영어)
+    {"q": '("nickel sulfate" OR "cobalt sulfate" OR "lithium carbonate" OR "lithium hydroxide") ("price" OR "market" OR "supply")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # A-3. 니켈·코발트 원재료 (영어)
+    {"q": '("nickel" OR "cobalt") ("battery" OR "supply chain") ("price" OR "shortage" OR "market" OR "index")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # A-4. 리튬 원재료 (영어)
+    {"q": '"lithium" ("battery" OR "recycling") ("price" OR "spot" OR "supply" OR "shortage")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # A-5. 핵심광물 시황 (중국어)
+    {"q": '("硫酸镍" OR "硫酸钴" OR "碳酸锂" OR "氢氧化锂") ("价格" OR "现货" OR "供应")',
+     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
+
+
+    # ════════════════════════════════════════
+    # B. 재활용사
+    # ════════════════════════════════════════
+
+    # B-1. 성일하이텍 직접 감시 (한국어)
     {"q": '"성일하이텍" OR "에코프로씨엔지" OR "아이에스티엠씨" OR "IS에코솔루션"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # 2 — SungEel 영문명 직접 감시 (신규)
-    {"q": '"SungEel" OR "Sungeel HiTech"',
+    # B-2. SungEel 영문명 감시 (영어)
+    {"q": '"SungEel" OR "Sungeel HiTech" OR "IS Eco Solution"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # ── 글로벌 재활용사 ──
-    # 3 — 메이저
-    {"q": '("Glencore" OR "Umicore" OR "Redwood Materials" OR "Ascend Elements") "recycling"',
+    # B-3. 글로벌 메이저 재활용사 (영어)
+    {"q": '"Umicore" OR "Glencore" OR "Ascend Elements" OR "Redwood Materials"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # 4 — 북미 중소형 (Li-Cycle 제거 → Retriev·Battery Resources 추가 / IS Eco Solution·Interco·Blue Whale·Princeton NuEnergy 신규)
-    {"q": '("Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Blue Whale" OR "Princeton NuEnergy" OR "IS Eco Solution") "battery"',
+    # B-4. 북미 중소형 재활용사 (영어)
+    {"q": '"Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Blue Whale" OR "Princeton NuEnergy"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # 5 — 유럽 재활용사 (신규: 성일 폴란드·헝가리 법인 인접 경쟁사)
-    {"q": '("Fortum" OR "Stena Recycling" OR "BASF") ("battery recycling" OR "battery waste" OR "black mass")',
+    # B-5. 유럽 재활용사 (영어)
+    {"q": '("Fortum" OR "Stena Recycling" OR "BASF") ("battery" OR "recycling" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # 6 — Northvolt: 파산 후 자산 매각·공장 인수 맥락으로 한정
-    {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover")',
+    # B-6. 블랙매스·스크랩 시장 (영어)
+    {"q": '("black mass" OR "battery scrap" OR "feedstock") ("price" OR "shortage" OR "tender" OR "payables")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # ── 배터리 제조사 ──
-    # 7 — 셀 메이커
-    {"q": '("LG Energy Solution" OR "Samsung SDI" OR "SK On" OR "Panasonic" OR "CATL" OR "BYD") "recycling"',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # 8 — 완성차 (battery closed-loop → 실제 기사 표현으로 교체)
-    {"q": '("Tesla" OR "Hyundai" OR "Toyota" OR "Honda" OR "Volkswagen") ("battery take-back" OR "end-of-life battery" OR "second-life battery")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # ── 양극재·전구체 ──
-    # 9
-    {"q": '("EcoPro BM" OR "L&F" OR "POSCO Future M" OR "LG Chem") ("precursor" OR "cathode")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 10
-    {"q": '("에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학") ("전구체" OR "양극재")',
+    # B-7. 블랙매스·스크랩 시장 (한국어)
+    {"q": '("블랙매스" OR "폐배터리 스크랩") ("입찰" OR "매입가" OR "공급")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 리튬 원재료 생산사 ──
-    # 11
-    {"q": '("Albemarle" OR "SQM" OR "Ganfeng" OR "Tianqi") ("lithium supply" OR "production cut" OR "mine")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # ── 블랙매스·스크랩 ──
-    # 12
-    {"q": '("black mass" OR "battery scrap" OR "feedstock") ("shortage" OR "tender" OR "payables" OR "price")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 13
-    {"q": '("블랙매스" OR "폐배터리 스크랩") ("입찰" OR "매입가" OR "공급 부족")',
+    # ════════════════════════════════════════
+    # C. 셀 제조사 — 두 번째 조건 없이 전체 뉴스 수집
+    # ════════════════════════════════════════
+
+    # C-1. SK온 전체 뉴스 (한국어)
+    {"q": '"SK온"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 원재료 가격 ──
-    # 14
-    {"q": '("nickel sulfate" OR "cobalt sulfate") ("price" OR "market" OR "index")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 15
-    {"q": '("lithium carbonate" OR "lithium hydroxide") ("spot" OR "price" OR "supply")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 16
-    {"q": '("황산니켈" OR "황산코발트" OR "탄산리튬" OR "수산화리튬") ("가격" OR "시황")',
+    # C-2. LG에너지솔루션 전체 뉴스 (한국어)
+    {"q": '"LG에너지솔루션"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 인도네시아 니켈 (신규: HPAL·HPM 분석 맥락) ──
-    # 17
-    {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # ── 정책·규제 ──
-    # 18
-    {"q": '("EU Battery Regulation" OR "Battery Passport" OR "recycled content" OR "OBBBA") "compliance"',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 19
-    {"q": '("critical minerals" OR "IRA" OR "OBBBA") "battery recycling"',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 20 — 한국 정책 (배터리 단독 → 실제 기사 표현으로 확장)
-    {"q": '("이차전지" OR "사용후배터리" OR "폐배터리") ("EPR" OR "핵심광물" OR "순환이용" OR "재활용 의무")',
+    # C-3. 삼성SDI 전체 뉴스 (한국어)
+    {"q": '"삼성SDI"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 인도 ──
-    # 21
-    {"q": '"India" ("battery recycling" OR "EPR" OR "black mass" OR "CPCB")',
+    # C-4. 한국 3사 영문 뉴스 (영어)
+    {"q": '"SK On" OR "LG Energy Solution" OR "Samsung SDI"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # ── 투자·M&A ──
-    # 22
-    {"q": '"battery recycling" ("M&A" OR "acquisition" OR "joint venture")',
+    # C-5. CATL·BYD (영어 — 배터리 맥락 유지: 비배터리 사업 노이즈 차단)
+    {"q": '("CATL" OR "BYD") ("battery" OR "EV" OR "electric vehicle" OR "recycling" OR "cathode")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 23
-    {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십")',
+
+    # C-6. CATL·BYD (중국어)
+    {"q": '("宁德时代" OR "比亚迪") ("电池" OR "新能源" OR "回收")',
+     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
+
+    # C-7. 파나소닉 (일본어)
+    {"q": '"パナソニック" ("電池" OR "EV" OR "リサイクル" OR "リチウム")',
+     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
+
+    # C-8. Northvolt 자산 매각 (파산 후 유럽 공급망 재편 추적)
+    {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover" OR "insolvency")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+
+    # ════════════════════════════════════════
+    # D. 전구체 · 양극재
+    # ════════════════════════════════════════
+
+    # D-1. 전구체·양극재 메이커 전체 뉴스 (한국어)
+    {"q": '"에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 기술·공정 ──
-    # 24 — 수계 공정 (hydromet 약칭 추가)
-    {"q": '("hydrometallurgy" OR "hydromet" OR "direct recycling") ("battery" OR "recovery" OR "purity")',
+    # D-2. 전구체·양극재 메이커 (영어)
+    {"q": '("EcoPro BM" OR "L&F" OR "POSCO Future M" OR "LG Chem") ("precursor" OR "cathode" OR "battery")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 25 — LFP 전용 (신규: 성일 전략 집중 분야)
+
+    # D-3. 일본 소재·전구체 (일본어)
+    {"q": '("住友金属鉱山" OR "日亜化学") ("正極材" OR "前駆体" OR "リサイクル" OR "電池")',
+     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
+
+
+    # ════════════════════════════════════════
+    # E. 광산 · 원재료 공급
+    # ════════════════════════════════════════
+
+    # E-1. 리튬 광산 메이저 (영어)
+    {"q": '("Albemarle" OR "SQM" OR "Ganfeng" OR "Tianqi") ("lithium" OR "mine" OR "production" OR "supply")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # E-2. 호주·칠레 리튬 광산 (영어)
+    {"q": '("Pilbara Minerals" OR "Liontown" OR "Arcadium" OR "Sigma Lithium") ("lithium" OR "mine" OR "production" OR "supply")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # E-3. 인도네시아 니켈 (영어)
+    {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # E-4. 인도네시아 니켈 (인도네시아어) — 현지 뉴스 직접 수집
+    {"q": '("nikel" OR "HPAL" OR "RKEF") ("harga" OR "ekspor" OR "tambang" OR "produksi" OR "kuota")',
+     "lang": "id", "gl": "ID", "ceid": "ID:id"},
+
+    # E-5. 콩고 코발트 광산 (영어)
+    {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+
+    # ════════════════════════════════════════
+    # F. 기술 · 공정
+    # ════════════════════════════════════════
+
+    # F-1. 습식제련·HPAL (영어)
+    {"q": '("hydrometallurgy" OR "hydromet" OR "HPAL") ("battery" OR "recycling" OR "nickel" OR "cobalt" OR "lithium")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # F-2. 건식제련·직접재활용 (영어)
+    {"q": '("pyrometallurgy" OR "smelting" OR "direct recycling") ("battery" OR "black mass" OR "recycling")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # F-3. LFP 재활용 (영어) — 성일 전략 집중 분야
     {"q": '("LFP" OR "lithium iron phosphate") ("recycling" OR "recovery" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # ── 일본어 ──
-    # 26
-    {"q": '("住友金属鉱山" OR "日亜化学") ("正極材" OR "前駆体" OR "リサイクル")',
-     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
-    # 27
-    {"q": '("パナソニック" OR "トヨタ") ("電池リサイクル" OR "回収")',
-     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
+    # F-4. 습식·건식 제련 (한국어)
+    {"q": '("습식제련" OR "건식제련" OR "HPAL" OR "직접재활용") ("배터리" OR "재활용" OR "블랙매스")',
+     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # ── 중국어 ──
-    # 28
-    {"q": '("硫酸镍" OR "硫酸钴" OR "碳酸锂") ("价格" OR "现货")',
-     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-    # 29
-    {"q": '"动力电池回收" ("政策" OR "标准")',
+
+    # ════════════════════════════════════════
+    # G. 정책 · 규제
+    # ════════════════════════════════════════
+
+    # G-1. EU 배터리 규제 (영어)
+    {"q": '("EU Battery Regulation" OR "Battery Passport" OR "recycled content" OR "battery directive") ("compliance" OR "deadline" OR "standard")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # G-2. 미국 정책 (영어)
+    {"q": '("IRA" OR "OBBBA" OR "critical minerals") ("battery" OR "recycling" OR "supply chain")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # G-3. 인도 정책 (영어)
+    {"q": '"India" ("battery recycling" OR "EPR" OR "black mass" OR "CPCB" OR "critical mineral")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # G-4. 한국 정책 (한국어)
+    {"q": '("이차전지" OR "사용후배터리" OR "폐배터리") ("EPR" OR "핵심광물" OR "순환이용" OR "재활용 의무" OR "생산자책임")',
+     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+
+    # G-5. 중국 배터리 재활용 정책 (중국어)
+    {"q": '"动力电池回收" ("政策" OR "标准" OR "法规")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
 
-    # ── 헝가리어 (신규: 성일·삼성SDI 현지 법인 모니터링) ──
-    # 30
-    {"q": '"SungEel" OR "Samsung SDI" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
+
+    # ════════════════════════════════════════
+    # H. 투자 · M&A
+    # ════════════════════════════════════════
+
+    # H-1. 배터리 재활용 투자·M&A (영어)
+    {"q": '"battery recycling" ("M&A" OR "acquisition" OR "joint venture" OR "investment" OR "funding")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # H-2. 배터리 재활용 투자·M&A (한국어)
+    {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십" OR "인수" OR "합작")',
+     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+
+
+    # ════════════════════════════════════════
+    # I. 헝가리어 — 현지 법인 모니터링
+    # ════════════════════════════════════════
+
+    {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
      "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
 
-    # ── SMM 직접 피드 ──
-    # 31
+
+    # ════════════════════════════════════════
+    # J. SMM Metal 직접 피드
+    # ════════════════════════════════════════
+
     {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879",
      "lang": "en"},
 ]
 
 NOISE_KEYWORDS = [
-    "crypto","bitcoin","ethereum","nft","dogecoin","게임","영화","드라마","리뷰",
-    "car review","smartphone review","stock tip","smartwatch","battery etf",
-    "lithium etf","목표가 상향","목표가 하향","투자의견","eurekaalert","전자폐기물",
-    "cassava","agriculture","crop","petro","petroleum","oil refin",
-    "dow jones","s&p 500","nasdaq"
+    "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
+    "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
+    "stock tip", "smartwatch",
+    "battery etf", "lithium etf",
+    "목표가 상향", "목표가 하향", "투자의견",
+    "eurekaalert", "전자폐기물",
+    "cassava", "agriculture", "crop",
+    "petro", "petroleum", "oil refin",
+    "dow jones", "s&p 500", "nasdaq",
 ]
 
 NOISE_SOURCES = [
-    "openpr","prnewswire","businesswire","globenewswire","einpresswire",
-    "accesswire","prnews","prlog","marketwired","newswire","pr.com","prweb",
-    "discoveryalert","bravenewcoin","eurekaalert","cryptoslate","coindesk",
-    "benzinga","seekingalpha","motleyfool","investopedia","indexbox",
-    "msn","msn.com",
+    "openpr", "prnewswire", "businesswire", "globenewswire", "einpresswire",
+    "accesswire", "prnews", "prlog", "marketwired", "newswire", "pr.com", "prweb",
+    "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
+    "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
+    "msn", "msn.com",
 ]
 
 WHITELIST = [
-    # 공통 배터리·재활용
+    # ── 공통 배터리·재활용 ──
     "battery", "배터리", "전지", "이차전지", "사용후배터리", "폐배터리",
     "recycl", "재활용", "순환이용",
 
-    # 핵심 금속
+    # ── 핵심 금속 ──
     "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
 
-    # 소재·공정
-    "black mass", "블랙매스", "cathode", "양극재", "precursor", "전구체",
+    # ── 소재·공정 ──
+    "black mass", "블랙매스",
+    "cathode", "양극재", "precursor", "전구체",
     "anode", "electrolyte", "feedstock", "scrap", "스크랩",
     "황산니켈", "황산코발트", "탄산리튬", "수산화리튬",
     "nickel sulfate", "cobalt sulfate", "lithium carbonate", "lithium hydroxide",
-    "hydrometallurgy", "hydromet",
+    "hydrometallurgy", "hydromet", "hpal",
+    "pyrometallurgy", "smelting", "습식제련", "건식제련",
     "lfp", "lithium iron phosphate",
 
-    # EV·인프라
+    # ── EV·인프라 ──
     "gigafactory", "kwh", "mwh", "ev ", "electric vehicle",
 
-    # 글로벌 재활용사
-    "ascend", "redwood", "cirba", "ecobat", "umicore",
-    "glencore", "northvolt", "retriev", "battery resources",
-    "interco", "blue whale", "princeton nuenergy",
-    "is eco solution",
-    "fortum", "stena",
-
-    # 성일하이텍
+    # ── 재활용사 ──
     "sungeel", "성일",
+    "ascend", "redwood", "cirba", "ecobat", "umicore", "glencore",
+    "retriev", "battery resources", "interco", "blue whale", "princeton nuenergy",
+    "is eco solution", "fortum", "stena",
 
-    # 셀 메이커·완성차
-    "samsung",          # samsung sdi보다 넓게 — 헝가리 기사 대응
-    "catl", "byd", "lges", "sk on", "panasonic",
+    # ── 셀 제조사 (기업명 자체가 패스키 — 두 번째 조건 불필요) ──
+    "samsung",              # samsung sdi 포함, 헝가리어 기사 대응
+    "sk온",                 # 한국어 표기
+    "sk on",                # 영문 표기
+    "lg에너지솔루션",
+    "lg energy solution",
+    "삼성sdi",
+    "catl", "byd", "panasonic", "northvolt",
+
+    # ── 전구체·양극재 메이커 ──
+    "에코프로비엠", "에코프로", "포스코퓨처엠", "엘앤에프",
+    "성일하이텍",
+
+    # ── 광산·원재료 공급사 ──
     "albemarle", "sqm", "ganfeng", "tianqi",
+    "pilbara", "liontown", "arcadium", "sigma lithium",
 
-    # 국내 소재사
-    "성일하이텍", "에코프로", "포스코퓨처엠",
-
-    # 정책
+    # ── 정책 ──
     "circular economy", "생산자책임",
 
-    # 헝가리어 — 헝가리 쿼리 대응
+    # ── 인도네시아어 (니켈 광산) ──
+    "nikel", "tambang", "rkef",
+
+    # ── 헝가리어 ──
     "akkumulátor", "akkuhulladék",
 
-    # 중국어
-    "电池", "回收", "锂", "镍", "钴",
+    # ── 중국어 ──
+    "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
 
-    # 일본어
+    # ── 일본어 ──
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
 ]
 
@@ -404,11 +504,11 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 최대 2건 + 일반 15건으로 확대)
+# 본문 수집 (SMM 최대 2건 + 일반 15건)
 # ============================================================
 async def enrich_articles(articles):
     smm     = [a for a in articles if "SMM" in a.get("source", "")][:2]
-    general = [a for a in articles if "SMM" not in a.get("source", "")][:15]  # 9 → 15
+    general = [a for a in articles if "SMM" not in a.get("source", "")][:15]
     targets = smm + general
 
     print(f"\n본문 추출 대상: SMM {len(smm)}건 + 일반 {len(general)}건 = {len(targets)}건")
@@ -443,7 +543,7 @@ async def enrich_articles(articles):
 
             real_url = await get_real_url(page, link)
             if real_url:
-                article["real_url"] = real_url   # 이메일 링크용으로 저장
+                article["real_url"] = real_url  # 이메일 링크용으로 저장
                 body = fetch_body(real_url)
                 article["body"] = body
                 if body:
@@ -472,8 +572,9 @@ def analyze(articles):
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
     def format_article(i, a):
+        display_url = a.get("real_url") or a["link"]  # real_url 우선 — 실제 기사 URL 전달
         line = (f"{i+1}. [{a['lang'].upper()}] {a['title']}\n"
-                f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {a['link']}")
+                f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {display_url}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
             line += f"\n   [본문]: {body[:2000]}"
@@ -493,7 +594,7 @@ def analyze(articles):
 
 [선별 기준]
 - 오늘({today_str}) 기사 최우선. 어제 기사는 오늘 기사 부족 시만 포함
-- 동일 기업이라도 주제(실적/투자/정책/기술/시황)가 다르면 별도 기사로 포함 가능
+- 동일 기업이라도 주제(실적/투자/정책/기술/시황/M&A)가 다르면 별도 기사로 포함 가능
 - 동일 기업·동일 주제인 경우에만 가장 최신 1건으로 제한, 중복 절대 금지
 - 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
@@ -508,7 +609,7 @@ def analyze(articles):
 - 성일하이텍 관점은 강제하지 않음. 직접적 연관성이 명확할 때만 자연스럽게 언급
 - 나쁜 예: "리튬 시장이 공급 부족 국면에 진입할 것으로 전망된다."
 - 좋은 예: "Canaccord Genuity는 2026~2035년 구조적 리튬 공급부족을 경고했고, Morgan Stanley는 LCE 8만 톤, UBS는 2만 2천 톤 부족을 추정했다. 탄산리튬 현물가는 4월 23일 기준 1kg당 20.29달러로 연초 대비 2배 이상 반등했다."
-- 좋은 예2: "포스코퓨처엠(POSCO Future M)이 베트남 타이응웬성에서 IRC를 획득하고 3,570억 원을 투자해 2028년 인조흑연 음극재 양산을 목표로 한다."
+- 좋은 예2: "SK이노베이션 배터리 자회사 SK온이 헝가리 코마롬 2개 법인(자산 합계 7조 6천억 원)을 지리자동차그룹에 매각하는 방안을 협의 중이며, EU 산업가속화법(IAA)의 중국 지분 50% 상한 조항이 딜의 핵심 변수로 부상했다."
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
@@ -531,7 +632,7 @@ def analyze(articles):
     "link": "URL",
     "summary": "본문 수치·기관명·기업명 필수 반영, 3문장 이내 자유 서술.",
     "tag": "원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정 중 하나",
-    "region": "한국|중국|미국|EU|일본|글로벌"
+    "region": "한국|중국|미국|EU|일본|인도네시아|글로벌"
   }}],
   "trends": [{{"title": "트렌드 제목", "body": "구체적 내용 2~3문장"}}],
   "insights": ["시사점"]
@@ -568,7 +669,7 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 # ============================================================
 def build_email(data):
     today = datetime.now().strftime("%Y년 %m월 %d일")
-    TAG_ORDER = ["원재료 및 시황","공급망 및 파트너십","투자 및 M&A","정책 및 규제","기술 및 공정"]
+    TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
     by_tag = {}
     for a in data.get("articles", []):
@@ -680,4 +781,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
