@@ -2,7 +2,8 @@ name: Battery Daily Brief
 
 on:
   schedule:
-    - cron: '0 21 * * *'  # 매일 06:00 KST (UTC 21:00)
+    - cron: '30 21 * * *'  # 매일 06:30 KST (UTC 21:30)
+    - cron: '30 7 * * *'   # 매일 16:30 KST (UTC 07:30)
   workflow_dispatch:
 
 jobs:
