@@ -26,7 +26,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 # ============================================================
 # RSS 쿼리
 # 설계 원칙:
-#   - 카테고리(A~J)별로 구분, 각 카테고리는 해당 기업/주제 기사를 폭넓게 수집
+#   - 카테고리(A~K)별로 구분, 각 카테고리는 해당 기업/주제 기사를 폭넓게 수집
 #   - 셀제조사는 두 번째 조건 없이 기업명만으로 수집 (NOISE 필터가 걸러냄)
 #   - 한국어 / 영어 / 중국어 / 일본어 / 인도네시아어 커버
 # ============================================================
@@ -58,178 +58,199 @@ QUERIES = [
 
 
     # ════════════════════════════════════════
-    # B. 재활용사
+    # B. 시황 전문 매체
     # ════════════════════════════════════════
 
-    # B-1. 성일하이텍 직접 감시 (한국어)
+    # B-1. SMM (Shanghai Metals Market)
+    {"q": '"SMM" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery" OR "recycling")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # B-2. Fastmarkets
+    {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # B-3. S&P Global
+    {"q": '"S&P Global" ("nickel" OR "cobalt" OR "lithium" OR "battery" OR "recycling")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    # B-4. Benchmark Mineral Intelligence
+    {"q": '"Benchmark Mineral Intelligence" OR "Benchmark Minerals" ("lithium" OR "battery" OR "cathode" OR "recycling")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+
+    # ════════════════════════════════════════
+    # C. 재활용사
+    # ════════════════════════════════════════
+
+    # C-1. 성일하이텍 직접 감시 (한국어)
     {"q": '"성일하이텍" OR "에코프로씨엔지" OR "아이에스티엠씨" OR "IS에코솔루션"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # B-2. SungEel 영문명 감시 (영어)
+    # C-2. SungEel 영문명 감시 (영어)
     {"q": '"SungEel" OR "Sungeel HiTech" OR "IS Eco Solution"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # B-3. 글로벌 메이저 재활용사 (영어)
+    # C-3. 글로벌 메이저 재활용사 (영어)
     {"q": '"Umicore" OR "Glencore" OR "Ascend Elements" OR "Redwood Materials"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # B-4. 북미 중소형 재활용사 (영어)
-    {"q": '"Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Blue Whale" OR "Princeton NuEnergy"',
+    # C-4. 북미 중소형 재활용사 (영어)
+    {"q": '"Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Princeton NuEnergy"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # B-5. 유럽 재활용사 (영어)
+    # C-5. 유럽 재활용사 (영어)
     {"q": '("Fortum" OR "Stena Recycling" OR "BASF") ("battery" OR "recycling" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # B-6. 블랙매스·스크랩 시장 (영어)
+    # C-6. 블랙매스·스크랩 시장 (영어)
     {"q": '("black mass" OR "battery scrap" OR "feedstock") ("price" OR "shortage" OR "tender" OR "payables")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # B-7. 블랙매스·스크랩 시장 (한국어)
+    # C-7. 블랙매스·스크랩 시장 (한국어)
     {"q": '("블랙매스" OR "폐배터리 스크랩") ("입찰" OR "매입가" OR "공급")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
 
     # ════════════════════════════════════════
-    # C. 셀 제조사 — 두 번째 조건 없이 전체 뉴스 수집
+    # D. 셀 제조사 — 두 번째 조건 없이 전체 뉴스 수집
     # ════════════════════════════════════════
 
-    # C-1. SK온 전체 뉴스 (한국어)
+    # D-1. SK온 전체 뉴스 (한국어)
     {"q": '"SK온"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # C-2. LG에너지솔루션 전체 뉴스 (한국어)
+    # D-2. LG에너지솔루션 전체 뉴스 (한국어)
     {"q": '"LG에너지솔루션"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # C-3. 삼성SDI 전체 뉴스 (한국어)
+    # D-3. 삼성SDI 전체 뉴스 (한국어)
     {"q": '"삼성SDI"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # C-4. 한국 3사 영문 뉴스 (영어)
+    # D-4. 한국 3사 영문 뉴스 (영어)
     {"q": '"SK On" OR "LG Energy Solution" OR "Samsung SDI"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # C-5. CATL·BYD (영어 — 배터리 맥락 유지: 비배터리 사업 노이즈 차단)
+    # D-5. CATL·BYD (영어 — 재활용·배터리 맥락 유지)
     {"q": '("CATL" OR "BYD") ("battery" OR "EV" OR "electric vehicle" OR "recycling" OR "cathode")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # C-6. CATL·BYD (중국어)
-    {"q": '("宁德时代" OR "比亚迪") ("电池" OR "新能源" OR "回收")',
+    # D-6. CATL·BYD (중국어 — 재활용 맥락으로 좁힘)
+    {"q": '("宁德时代" OR "比亚迪") ("电池回收" OR "回收" OR "黑粉" OR "原材料" OR "碳酸锂")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
 
-    # C-7. 파나소닉 (일본어)
+    # D-7. 파나소닉 (일본어)
     {"q": '"パナソニック" ("電池" OR "EV" OR "リサイクル" OR "リチウム")',
      "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
 
-    # C-8. Northvolt 자산 매각 (파산 후 유럽 공급망 재편 추적)
+    # D-8. Northvolt 자산 매각 (파산 후 유럽 공급망 재편 추적)
     {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover" OR "insolvency")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
 
     # ════════════════════════════════════════
-    # D. 전구체 · 양극재
+    # E. 전구체 · 양극재
     # ════════════════════════════════════════
 
-    # D-1. 전구체·양극재 메이커 전체 뉴스 (한국어)
+    # E-1. 전구체·양극재 메이커 (한국어)
     {"q": '"에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-2. 전구체·양극재 메이커 (영어)
+    # E-2. 전구체·양극재 메이커 (영어)
     {"q": '("EcoPro BM" OR "L&F" OR "POSCO Future M" OR "LG Chem") ("precursor" OR "cathode" OR "battery")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # D-3. 일본 소재·전구체 (일본어)
+    # E-3. 일본 소재·전구체 (일본어)
     {"q": '("住友金属鉱山" OR "日亜化学") ("正極材" OR "前駆体" OR "リサイクル" OR "電池")',
      "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
 
 
     # ════════════════════════════════════════
-    # E. 광산 · 원재료 공급
+    # F. 광산 · 원재료 공급
     # ════════════════════════════════════════
 
-    # E-1. 리튬 광산 메이저 (영어)
+    # F-1. 리튬 광산 메이저 (영어)
     {"q": '("Albemarle" OR "SQM" OR "Ganfeng" OR "Tianqi") ("lithium" OR "mine" OR "production" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # E-2. 호주·칠레 리튬 광산 (영어)
+    # F-2. 호주·칠레 리튬 광산 (영어)
     {"q": '("Pilbara Minerals" OR "Liontown" OR "Arcadium" OR "Sigma Lithium") ("lithium" OR "mine" OR "production" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # E-3. 인도네시아 니켈 (영어)
+    # F-3. 인도네시아 니켈 (영어)
     {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # E-4. 인도네시아 니켈 (인도네시아어) — 현지 뉴스 직접 수집
+    # F-4. 인도네시아 니켈 (인도네시아어) — 현지 뉴스 직접 수집
     {"q": '("nikel" OR "HPAL" OR "RKEF") ("harga" OR "ekspor" OR "tambang" OR "produksi" OR "kuota")',
      "lang": "id", "gl": "ID", "ceid": "ID:id"},
 
-    # E-5. 콩고 코발트 광산 (영어)
+    # F-5. 콩고 코발트 광산 (영어)
     {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
 
     # ════════════════════════════════════════
-    # F. 기술 · 공정
+    # G. 기술 · 공정
     # ════════════════════════════════════════
 
-    # F-1. 습식제련·HPAL (영어)
+    # G-1. 습식제련·HPAL (영어)
     {"q": '("hydrometallurgy" OR "hydromet" OR "HPAL") ("battery" OR "recycling" OR "nickel" OR "cobalt" OR "lithium")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # F-2. 건식제련·직접재활용 (영어)
+    # G-2. 건식제련·직접재활용 (영어)
     {"q": '("pyrometallurgy" OR "smelting" OR "direct recycling") ("battery" OR "black mass" OR "recycling")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # F-3. LFP 재활용 (영어) — 성일 전략 집중 분야
+    # G-3. LFP 재활용 (영어) — 성일 전략 집중 분야
     {"q": '("LFP" OR "lithium iron phosphate") ("recycling" OR "recovery" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # F-4. 습식·건식 제련 (한국어)
+    # G-4. 습식·건식 제련 (한국어)
     {"q": '("습식제련" OR "건식제련" OR "HPAL" OR "직접재활용") ("배터리" OR "재활용" OR "블랙매스")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
 
     # ════════════════════════════════════════
-    # G. 정책 · 규제
+    # H. 정책 · 규제
     # ════════════════════════════════════════
 
-    # G-1. EU 배터리 규제 (영어)
+    # H-1. EU 배터리 규제 (영어)
     {"q": '("EU Battery Regulation" OR "Battery Passport" OR "recycled content" OR "battery directive") ("compliance" OR "deadline" OR "standard")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # G-2. 미국 정책 (영어)
+    # H-2. 미국 정책 (영어)
     {"q": '("IRA" OR "OBBBA" OR "critical minerals") ("battery" OR "recycling" OR "supply chain")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # G-3. 인도 정책 (영어)
+    # H-3. 인도 정책 (영어)
     {"q": '"India" ("battery recycling" OR "EPR" OR "black mass" OR "CPCB" OR "critical mineral")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # G-4. 한국 정책 (한국어)
+    # H-4. 한국 정책 (한국어)
     {"q": '("이차전지" OR "사용후배터리" OR "폐배터리") ("EPR" OR "핵심광물" OR "순환이용" OR "재활용 의무" OR "생산자책임")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # G-5. 중국 배터리 재활용 정책 (중국어)
+    # H-5. 중국 배터리 재활용 정책 (중국어)
     {"q": '"动力电池回收" ("政策" OR "标准" OR "法规")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
 
 
     # ════════════════════════════════════════
-    # H. 투자 · M&A
+    # I. 투자 · M&A
     # ════════════════════════════════════════
 
-    # H-1. 배터리 재활용 투자·M&A (영어)
+    # I-1. 배터리 재활용 투자·M&A (영어)
     {"q": '"battery recycling" ("M&A" OR "acquisition" OR "joint venture" OR "investment" OR "funding")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # H-2. 배터리 재활용 투자·M&A (한국어)
+    # I-2. 배터리 재활용 투자·M&A (한국어)
     {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십" OR "인수" OR "합작")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
 
     # ════════════════════════════════════════
-    # I. 헝가리어 — 현지 법인 모니터링
+    # J. 헝가리어 — 현지 법인 모니터링
     # ════════════════════════════════════════
 
     {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
@@ -237,7 +258,7 @@ QUERIES = [
 
 
     # ════════════════════════════════════════
-    # J. SMM Metal 직접 피드
+    # K. SMM Metal Google Alerts 피드 (백업용 유지)
     # ════════════════════════════════════════
 
     {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879",
@@ -245,15 +266,25 @@ QUERIES = [
 ]
 
 NOISE_KEYWORDS = [
+    # 가상화폐·NFT
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
+    # 엔터·소비자
     "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
     "stock tip", "smartwatch",
+    # ETF·단순 주가
     "battery etf", "lithium etf",
+    "stock surges", "stock falls", "stock rises", "stock drops",
+    "shares surge", "shares fall",
+    "주가 상승", "주가 하락", "주가 급등", "주가 급락",
     "목표가 상향", "목표가 하향", "투자의견",
+    # PR·학술
     "eurekaalert", "전자폐기물",
+    # 무관 산업
     "cassava", "agriculture", "crop",
     "petro", "petroleum", "oil refin",
     "dow jones", "s&p 500", "nasdaq",
+    # 동물 관련 (Blue Whale 동물 기사 차단)
+    "blue whale season", "whale watching", "whale migration",
 ]
 
 NOISE_SOURCES = [
@@ -262,6 +293,7 @@ NOISE_SOURCES = [
     "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
     "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
     "msn", "msn.com",
+    "aol.com",      # 오래된 기사 재배포 잦음
 ]
 
 WHITELIST = [
@@ -285,13 +317,16 @@ WHITELIST = [
     # ── EV·인프라 ──
     "gigafactory", "kwh", "mwh", "ev ", "electric vehicle",
 
+    # ── 시황 전문 매체 ──
+    "fastmarkets", "benchmark mineral", "s&p global", "smm",
+
     # ── 재활용사 ──
     "sungeel", "성일",
     "ascend", "redwood", "cirba", "ecobat", "umicore", "glencore",
-    "retriev", "battery resources", "interco", "blue whale", "princeton nuenergy",
+    "retriev", "battery resources", "interco", "princeton nuenergy",
     "is eco solution", "fortum", "stena",
 
-    # ── 셀 제조사 (기업명 자체가 패스키 — 두 번째 조건 불필요) ──
+    # ── 셀 제조사 ──
     "samsung",              # samsung sdi 포함, 헝가리어 기사 대응
     "sk온",                 # 한국어 표기
     "sk on",                # 영문 표기
@@ -504,14 +539,26 @@ async def get_real_url(page, cbm_url):
     return None
 
 # ============================================================
-# 본문 수집 (SMM 최대 2건 + 일반 15건)
+# 본문 수집
+# - 성일하이텍 기사: 건수 무관 전량 포함
+# - SMM 최대 2건 + 나머지 슬롯을 일반 기사로 채움 (총 17건 상한)
 # ============================================================
 async def enrich_articles(articles):
-    smm     = [a for a in articles if "SMM" in a.get("source", "")][:2]
-    general = [a for a in articles if "SMM" not in a.get("source", "")][:15]
-    targets = smm + general
+    smm = [a for a in articles if "SMM" in a.get("source", "")][:2]
 
-    print(f"\n본문 추출 대상: SMM {len(smm)}건 + 일반 {len(general)}건 = {len(targets)}건")
+    sungeel_keywords = ["성일하이텍", "sungeel", "성일"]
+    sungeel = [a for a in articles
+               if "SMM" not in a.get("source", "")
+               and any(k in a["title"].lower() for k in sungeel_keywords)]
+
+    general_pool = [a for a in articles
+                    if "SMM" not in a.get("source", "") and a not in sungeel]
+    general_limit = max(0, 15 - len(sungeel))
+    general = general_pool[:general_limit]
+
+    targets = smm + sungeel + general
+
+    print(f"\n본문 추출 대상: SMM {len(smm)}건 + 성일 {len(sungeel)}건 + 일반 {len(general)}건 = {len(targets)}건")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -543,7 +590,7 @@ async def enrich_articles(articles):
 
             real_url = await get_real_url(page, link)
             if real_url:
-                article["real_url"] = real_url  # 이메일 링크용으로 저장
+                article["real_url"] = real_url
                 body = fetch_body(real_url)
                 article["body"] = body
                 if body:
@@ -572,7 +619,7 @@ def analyze(articles):
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
     def format_article(i, a):
-        display_url = a.get("real_url") or a["link"]  # real_url 우선 — 실제 기사 URL 전달
+        display_url = a.get("real_url") or a["link"]
         line = (f"{i+1}. [{a['lang'].upper()}] {a['title']}\n"
                 f"   출처: {a.get('source','불명')} | 날짜: {a.get('pub','')} | 링크: {display_url}")
         body = a.get("body", "") or a.get("snippet", "")
@@ -596,7 +643,7 @@ def analyze(articles):
 - 오늘({today_str}) 기사 최우선. 어제 기사는 오늘 기사 부족 시만 포함
 - 동일 기업이라도 주제(실적/투자/정책/기술/시황/M&A)가 다르면 별도 기사로 포함 가능
 - 동일 기업·동일 주제인 경우에만 가장 최신 1건으로 제한, 중복 절대 금지
-- 성일하이텍 관련 기사가 여러 건이면 가장 중요한 1건만
+- 성일하이텍 관련 기사는 반드시 포함
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
 
@@ -677,7 +724,6 @@ def build_email(data):
         by_tag.setdefault(tag, []).append(a)
 
     def card(a):
-        # real_url 우선, 없으면 link 사용 — Google News 리다이렉트 방지
         url = esc(a.get("real_url") or a.get("link", ""))
         summary = esc(a.get("summary", "")).replace('\n', '<br>')
         return f"""
@@ -753,7 +799,6 @@ def send_email(html_body):
     msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
-    # Bcc 헤더 없음 — sendmail recipients에만 추가
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
@@ -781,3 +826,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
