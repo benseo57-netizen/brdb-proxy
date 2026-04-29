@@ -511,9 +511,9 @@ def send_email(html_body):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_APP_PASS)
-        recipients = [TO_EMAIL] + ([BCC_EMAIL] if BCC_EMAIL else [])
+        bcc_list = [addr.strip() for addr in BCC_EMAIL.split(',') if addr.strip()] if BCC_EMAIL else []  # ← 수정
+        recipients = [TO_EMAIL] + bcc_list                                                                # ← 수정
         smtp.sendmail(GMAIL_USER, recipients, msg.as_string())
-    print(f"발송 완료 → {TO_EMAIL}")
 
 # ============================================================
 # 메인
