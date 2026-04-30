@@ -271,20 +271,55 @@ NOISE_KEYWORDS = [
     # 엔터·소비자
     "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
     "stock tip", "smartwatch",
-    # ETF·단순 주가
+    # ETF
     "battery etf", "lithium etf",
+    # 단순 주가 등락 (구체적 표현)
     "stock surges", "stock falls", "stock rises", "stock drops",
     "shares surge", "shares fall",
     "주가 상승", "주가 하락", "주가 급등", "주가 급락",
-    "목표가 상향", "목표가 하향", "투자의견",
+    "목표가 상향", "목표가 하향",   # 구체적 표현은 단독 유지
+    "투자의견", "유증", "유상증자",
+    "주가 전망", "주가 목표",
+    "증권 리포트", "analyst rating", "price target",
+    "buy rating", "sell rating",
+    "52주 신고가", "52주 신저가",   # 주가 신고가·신저가
+    "상한가", "하한가",             # 서킷브레이커
+    "거래량 상위", "코스닥 시장 금액", # 거래량 순위
     # PR·학술
     "eurekaalert", "전자폐기물",
     # 무관 산업
     "cassava", "agriculture", "crop",
     "petro", "petroleum", "oil refin",
     "dow jones", "s&p 500", "nasdaq",
-    # 동물 관련 (Blue Whale 동물 기사 차단)
+    # 동물 관련
     "blue whale season", "whale watching", "whale migration",
+]
+
+# AND 조건 필터 — 두 키워드가 동시에 제목에 있으면 차단
+# 단독으로 쓰면 오탐 위험이 있는 키워드를 쌍으로 처리
+NOISE_PAIRS = [
+    # 목표가·목표주가 — 증권사 리포트 패턴
+    ("목표가", "만원"),
+    ("목표가", "달러"),
+    ("목표가", "억"),
+    ("목표주가", "상향"),
+    ("목표주가", "하향"),
+    ("목표주가", "만원"),
+    ("목표주가", "달러"),
+    # 수익률 — 주가 맥락
+    ("수익률", "%"),
+    ("수익률", "주가"),
+    ("수익률", "투자"),
+    # 증권사 리포트 패턴
+    ("애널리스트", "전망"),
+    ("증권", "목표"),
+    ("증권", "상향"),
+    ("증권", "하향"),
+    # 코스닥·코스피 거래량 순위
+    ("코스닥", "거래량"),
+    ("코스닥", "상위"),
+    ("코스피", "거래량"),
+    ("코스피", "상위"),
 ]
 
 NOISE_SOURCES = [
@@ -467,6 +502,8 @@ def collect_rss():
                 lower_link   = link.lower()
 
                 if any(k in lower_title for k in NOISE_KEYWORDS):
+                    continue
+                if any(a in lower_title and b in lower_title for a, b in NOISE_PAIRS):
                     continue
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
@@ -715,7 +752,9 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 # 이메일 HTML 생성
 # ============================================================
 def build_email(data):
-    today = datetime.now().strftime("%Y년 %m월 %d일")
+    today    = datetime.now().strftime("%Y년 %m월 %d일")
+    kst_hour = (datetime.utcnow().hour + 9) % 24
+    session  = "AM" if kst_hour < 12 else "PM"
     TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
     by_tag = {}
@@ -772,7 +811,7 @@ def build_email(data):
 <body style="margin:0;padding:16px;background:#eef0f3;">
 <div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic','맑은 고딕',Arial,sans-serif;">
   <div style="background:#0f2744;padding:22px 28px;">
-    <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
+    <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF {session}</p>
     <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
@@ -784,7 +823,7 @@ def build_email(data):
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">{insights_html}</div>
   </div>
   <div style="background:#0f2744;padding:14px 28px;text-align:center;">
-    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
+    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief {session}&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
     <p style="color:#7ea8d4;font-size:10px;margin:5px 0 0;">(c) Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
   </div>
 </div>
@@ -794,9 +833,11 @@ def build_email(data):
 # Gmail 발송
 # ============================================================
 def send_email(html_body):
-    today = datetime.now().strftime("%Y년 %m월 %d일")
+    today    = datetime.now().strftime("%Y년 %m월 %d일")
+    kst_hour = (datetime.utcnow().hour + 9) % 24
+    session  = "AM" if kst_hour < 12 else "PM"
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
+    msg["Subject"] = f"[배터리 산업 Daily Brief {session}] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -826,4 +867,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
