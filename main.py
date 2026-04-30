@@ -115,20 +115,20 @@ QUERIES = [
     # D. 셀 제조사 — 두 번째 조건 없이 전체 뉴스 수집
     # ════════════════════════════════════════
 
-    # D-1. SK온 전체 뉴스 (한국어)
-    {"q": '"SK온"',
+    # D-1. SK온 — 증권 리포트·주가 기사 소스 차단
+    {"q": '"SK온" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-2. LG에너지솔루션 전체 뉴스 (한국어)
-    {"q": '"LG에너지솔루션"',
+    # D-2. LG에너지솔루션 — 증권 리포트·주가 기사 소스 차단
+    {"q": '"LG에너지솔루션" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-3. 삼성SDI 전체 뉴스 (한국어)
-    {"q": '"삼성SDI"',
+    # D-3. 삼성SDI — 증권 리포트·주가 기사 소스 차단
+    {"q": '"삼성SDI" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-4. 한국 3사 영문 뉴스 (영어)
-    {"q": '"SK On" OR "LG Energy Solution" OR "Samsung SDI"',
+    # D-4. 한국 3사 영문 뉴스 (영어) — 주가·애널리스트 리포트 소스 차단
+    {"q": '("SK On" OR "LG Energy Solution" OR "Samsung SDI") -"price target" -"analyst" -"rating" -"upgrades" -"downgrades"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
     # D-5. CATL·BYD (영어 — 재활용·배터리 맥락 유지)
@@ -273,18 +273,26 @@ NOISE_KEYWORDS = [
     "stock tip", "smartwatch",
     # ETF
     "battery etf", "lithium etf",
-    # 단순 주가 등락 (구체적 표현)
+    # 영문 주가 기사 접두사·투자 타이밍 분석
+    "stocks:",          # "Stocks: CATL is hoping..." 형태
+    "is it too late",   # "Is It Too Late To Consider..." 투자 타이밍 분석
+    # 단순 주가 등락
     "stock surges", "stock falls", "stock rises", "stock drops",
     "shares surge", "shares fall",
     "주가 상승", "주가 하락", "주가 급등", "주가 급락",
-    "목표가 상향", "목표가 하향",   # 구체적 표현은 단독 유지
+    "목표가 상향", "목표가 하향",
+    "목표 주가",            # 공백 포함 변형 추가
     "투자의견", "유증", "유상증자",
     "주가 전망", "주가 목표",
     "증권 리포트", "analyst rating", "price target",
     "buy rating", "sell rating",
-    "52주 신고가", "52주 신저가",   # 주가 신고가·신저가
-    "상한가", "하한가",             # 서킷브레이커
-    "거래량 상위", "코스닥 시장 금액", # 거래량 순위
+    "52주 신고가", "52주 신저가",
+    "상한가", "하한가",
+    "거래량 상위", "코스닥 시장 금액",
+    # 증권사 리포트 전용 표현
+    "뱅크 리포트",           # "[뱅크 리포트]" 형태 차단
+    "전환사채",              # CB 발행 기사
+    "비상장기사",            # 비상장 주가 기사
     # PR·학술
     "eurekaalert", "전자폐기물",
     # 무관 산업
@@ -295,32 +303,37 @@ NOISE_KEYWORDS = [
     "blue whale season", "whale watching", "whale migration",
 ]
 
-# AND 조건 필터 — 두 키워드가 동시에 제목에 있으면 차단
-# 단독으로 쓰면 오탐 위험이 있는 키워드를 쌍으로 처리
-NOISE_PAIRS = [
-    # 목표가·목표주가 — 증권사 리포트 패턴
-    ("목표가", "만원"),
-    ("목표가", "달러"),
-    ("목표가", "억"),
-    ("목표주가", "상향"),
-    ("목표주가", "하향"),
-    ("목표주가", "만원"),
-    ("목표주가", "달러"),
-    # 수익률 — 주가 맥락
-    ("수익률", "%"),
-    ("수익률", "주가"),
-    ("수익률", "투자"),
-    # 증권사 리포트 패턴
-    ("애널리스트", "전망"),
-    ("증권", "목표"),
-    ("증권", "상향"),
-    ("증권", "하향"),
-    # 코스닥·코스피 거래량 순위
-    ("코스닥", "거래량"),
-    ("코스닥", "상위"),
-    ("코스피", "거래량"),
-    ("코스피", "상위"),
-]
+# AND 조건 필터 — 정규식 기반으로 교체 (패턴 추가형 리스트보다 유지보수 용이)
+# 한국어 증권·주가 패턴
+_NOISE_RE_KO = re.compile(
+    r'(목표\s*주가|목표가)\s*(상향|하향|제시|유지|\d+만원|\d+달러|\d+억)'
+    r'|\d+만원\s*(목표|하향|상향)'
+    r'|(kb|nh투자|ibk투자|하나|미래에셋|키움|신한투자|대신|삼성|한국투자)증권\s*(전망|상향|하향|제시|목표|리포트|보고서)'
+    r'|주가\s*(상승|하락|급등|급락|전망|목표)'
+    r'|52주\s*(신고가|신저가)'
+    r'|(상한가|하한가|거래정지)'
+    r'|(유증|유상증자|전환사채|CB\s*발행)'
+    r'|(코스닥|코스피)\s*(거래량|상위|순위)'
+    r'|수익률.{0,10}(주가|투자|%)'
+    r'|(애널리스트|analyst).{0,15}(전망|목표|제시|rating|target)'
+    , re.IGNORECASE
+)
+
+# 영어 증권·주가 패턴
+_NOISE_RE_EN = re.compile(
+    r'(raises?|cuts?|lifts?|lowers?|maintains?|reiterates?)\s*(price\s*)?target'
+    r'|price\s*target\s*(raised|cut|lifted|lowered|increased|decreased)'
+    r'|(upgrades?|downgrades?)\s*(to\s*)?(buy|hold|sell|overweight|underweight|neutral)'
+    r'|analyst\s*(rating|note|report|target)'
+    r'|stock\s*(surges?|soars?|falls?|drops?|rises?|climbs?)\s*\d+\s*%'
+    r'|shares\s*(up|down)\s*\d+\s*%'
+    r'|(bank of america|goldman sachs|morgan stanley|jpmorgan|daiwa|macquarie|barclays|ubs|citigroup)\s*(raises?|cuts?|initiates?|target)'
+    , re.IGNORECASE
+)
+
+def is_stock_noise(title: str) -> bool:
+    """주가·증권 리포트 노이즈 여부 판별"""
+    return bool(_NOISE_RE_KO.search(title) or _NOISE_RE_EN.search(title))
 
 NOISE_SOURCES = [
     "openpr", "prnewswire", "businesswire", "globenewswire", "einpresswire",
@@ -328,7 +341,8 @@ NOISE_SOURCES = [
     "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
     "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
     "msn", "msn.com",
-    "aol.com",      # 오래된 기사 재배포 잦음
+    "aol.com",          # 오래된 기사 재배포 잦음
+    "simplywall.st",    # 개인투자자용 주식 분석 사이트
 ]
 
 WHITELIST = [
@@ -503,7 +517,7 @@ def collect_rss():
 
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
-                if any(a in lower_title and b in lower_title for a, b in NOISE_PAIRS):
+                if is_stock_noise(title):   # 정규식 기반 주가·증권 노이즈 필터
                     continue
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
@@ -682,7 +696,12 @@ def analyze(articles):
 - 동일 기업·동일 주제인 경우에만 가장 최신 1건으로 제한, 중복 절대 금지
 - 성일하이텍 관련 기사는 반드시 포함
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
-- 단순 주가 등락, PR 배포, ETF, 학술 보도자료 제외
+- 아래 유형은 절대 포함 금지:
+  · 증권사 목표주가·투자의견·리포트 (예: "KB증권 목표가 상향", "Morgan Stanley raises target")
+  · 단순 주가 등락·거래량 기사 (예: "SK온 주가 5% 급등", "삼성SDI 52주 신고가")
+  · 유상증자·전환사채·IR 행사 기사
+  · ETF 관련 기사
+  · 학술 보도자료·PR 배포
 
 [요약 작성 기준 — 가장 중요]
 - 3문장 이내 자유 서술형으로 작성
@@ -867,3 +886,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
