@@ -830,8 +830,6 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 # ============================================================
 def build_email(data):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
-    kst_hour = (datetime.utcnow().hour + 9) % 24
-    session  = "AM" if kst_hour < 12 else "PM"
     TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
     by_tag = {}
@@ -889,7 +887,7 @@ def build_email(data):
 <div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic','맑은 고딕',Arial,sans-serif;">
   <div style="background:#0f2744;padding:22px 28px;">
     <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
-    <p style="color:#90b4d8;font-size:12px;margin:0;">{today} {session}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
+    <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{articles_html}</div>
@@ -900,7 +898,7 @@ def build_email(data):
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">{insights_html}</div>
   </div>
   <div style="background:#0f2744;padding:14px 28px;text-align:center;">
-    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today} {session}</p>
+    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
     <p style="color:#7ea8d4;font-size:10px;margin:5px 0 0;">(c) Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
   </div>
 </div>
@@ -911,10 +909,8 @@ def build_email(data):
 # ============================================================
 def send_email(html_body):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
-    kst_hour = (datetime.utcnow().hour + 9) % 24
-    session  = "AM" if kst_hour < 12 else "PM"
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[배터리 산업 Daily Brief] {today} {session}"
+    msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
