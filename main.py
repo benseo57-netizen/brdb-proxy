@@ -26,8 +26,8 @@ genai.configure(api_key=GEMINI_API_KEY)
 # ============================================================
 # RSS 쿼리
 # 설계 원칙:
-#   - 카테고리(A~K)별로 구분, 각 카테고리는 해당 기업/주제 기사를 폭넓게 수집
-#   - 셀제조사는 두 번째 조건 없이 기업명만으로 수집 (NOISE 필터가 걸러냄)
+#   - 카테고리(A~K)별로 구분, 각 카테고리는 해당 기업/주제를 폭넓게 수집
+#   - 셀제조사는 Google -연산자로 증권 리포트·주가·IR 수집 단계부터 차단
 #   - 한국어 / 영어 / 중국어 / 일본어 / 인도네시아어 커버
 # ============================================================
 QUERIES = [
@@ -58,24 +58,24 @@ QUERIES = [
 
 
     # ════════════════════════════════════════
-    # B. 시황 전문 매체
+    # B. 시황 전문 매체 — 우선순위 풀로 별도 관리
     # ════════════════════════════════════════
 
     # B-1. SMM (Shanghai Metals Market)
     {"q": '"SMM" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
+     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
     # B-2. Fastmarkets
-    {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery")',
+     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
     # B-3. S&P Global
     {"q": '"S&P Global" ("nickel" OR "cobalt" OR "lithium" OR "battery" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
+     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
     # B-4. Benchmark Mineral Intelligence
     {"q": '"Benchmark Mineral Intelligence" OR "Benchmark Minerals" ("lithium" OR "battery" OR "cathode" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
+     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
 
     # ════════════════════════════════════════
@@ -112,38 +112,39 @@ QUERIES = [
 
 
     # ════════════════════════════════════════
-    # D. 셀 제조사 — 두 번째 조건 없이 전체 뉴스 수집
+    # D. 셀 제조사
+    # — Google -연산자로 증권 리포트·주가·IR 수집 단계부터 차단
     # ════════════════════════════════════════
 
-    # D-1. SK온 — 증권 리포트·주가 기사 소스 차단
-    {"q": '"SK온" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
+    # D-1. SK온 (한국어)
+    {"q": '"SK온" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-2. LG에너지솔루션 — 증권 리포트·주가 기사 소스 차단
-    {"q": '"LG에너지솔루션" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
+    # D-2. LG에너지솔루션 (한국어)
+    {"q": '"LG에너지솔루션" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-3. 삼성SDI — 증권 리포트·주가 기사 소스 차단
-    {"q": '"삼성SDI" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채',
+    # D-3. 삼성SDI (한국어)
+    {"q": '"삼성SDI" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
-    # D-4. 한국 3사 영문 뉴스 (영어) — 주가·애널리스트 리포트 소스 차단
+    # D-4. 한국 3사 영문 (영어)
     {"q": '("SK On" OR "LG Energy Solution" OR "Samsung SDI") -"price target" -"analyst" -"rating" -"upgrades" -"downgrades"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # D-5. CATL·BYD (영어 — 재활용·배터리 맥락 유지)
-    {"q": '("CATL" OR "BYD") ("battery" OR "EV" OR "electric vehicle" OR "recycling" OR "cathode")',
+    # D-5. CATL·BYD (영어) — 재활용·공급망 맥락으로 좁힘 (신차 리뷰 차단)
+    {"q": '("CATL" OR "BYD") ("battery recycling" OR "cathode" OR "black mass" OR "supply chain" OR "gigafactory")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
-    # D-6. CATL·BYD (중국어 — 재활용 맥락으로 좁힘)
-    {"q": '("宁德时代" OR "比亚迪") ("电池回收" OR "回收" OR "黑粉" OR "原材料" OR "碳酸锂")',
+    # D-6. CATL·BYD (중국어) — 재활용 맥락
+    {"q": '("宁德时代" OR "比亚迪") ("电池回收" OR "回收" OR "黑粉" OR "原材料" OR "碳酸锂" OR "供应链")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
 
     # D-7. 파나소닉 (일본어)
-    {"q": '"パナソニック" ("電池" OR "EV" OR "リサイクル" OR "リチウム")',
+    {"q": '"パナソニック" ("電池" OR "リサイクル" OR "リチウム" OR "EV")',
      "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
 
-    # D-8. Northvolt 자산 매각 (파산 후 유럽 공급망 재편 추적)
+    # D-8. Northvolt 자산 매각 (유럽 공급망 재편 추적)
     {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover" OR "insolvency")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
@@ -153,7 +154,7 @@ QUERIES = [
     # ════════════════════════════════════════
 
     # E-1. 전구체·양극재 메이커 (한국어)
-    {"q": '"에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학"',
+    {"q": '("에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학") -목표주가 -목표가 -증권',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 
     # E-2. 전구체·양극재 메이커 (영어)
@@ -258,13 +259,16 @@ QUERIES = [
 
 
     # ════════════════════════════════════════
-    # K. SMM Metal Google Alerts 피드 (백업용 유지)
+    # K. SMM Metal Google Alerts 피드 (백업용)
     # ════════════════════════════════════════
 
     {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879",
      "lang": "en"},
 ]
 
+# ============================================================
+# 노이즈 필터
+# ============================================================
 NOISE_KEYWORDS = [
     # 가상화폐·NFT
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
@@ -273,26 +277,30 @@ NOISE_KEYWORDS = [
     "stock tip", "smartwatch",
     # ETF
     "battery etf", "lithium etf",
-    # 영문 주가 기사 접두사·투자 타이밍 분석
-    "stocks:",          # "Stocks: CATL is hoping..." 형태
-    "is it too late",   # "Is It Too Late To Consider..." 투자 타이밍 분석
+    # 주가 접두사·투자 타이밍 분석
+    "stocks:",
+    "is it too late",
     # 단순 주가 등락
     "stock surges", "stock falls", "stock rises", "stock drops",
     "shares surge", "shares fall",
     "주가 상승", "주가 하락", "주가 급등", "주가 급락",
     "목표가 상향", "목표가 하향",
-    "목표 주가",            # 공백 포함 변형 추가
+    "목표 주가",
     "투자의견", "유증", "유상증자",
     "주가 전망", "주가 목표",
     "증권 리포트", "analyst rating", "price target",
     "buy rating", "sell rating",
     "52주 신고가", "52주 신저가",
     "상한가", "하한가",
-    "거래량 상위", "코스닥 시장 금액",
+    "거래량 상위",
+    # IR 공시
+    "[ir]", "ir공시", "ir]",
     # 증권사 리포트 전용 표현
-    "뱅크 리포트",           # "[뱅크 리포트]" 형태 차단
-    "전환사채",              # CB 발행 기사
-    "비상장기사",            # 비상장 주가 기사
+    "뱅크 리포트",
+    "전환사채",
+    # 자동차 스펙·리뷰 (BYD 신차 기사 차단)
+    "flagship sedan", "driving range", "test drive",
+    "0-100km", "top speed", "horsepower",
     # PR·학술
     "eurekaalert", "전자폐기물",
     # 무관 산업
@@ -303,8 +311,28 @@ NOISE_KEYWORDS = [
     "blue whale season", "whale watching", "whale migration",
 ]
 
-# AND 조건 필터 — 정규식 기반으로 교체 (패턴 추가형 리스트보다 유지보수 용이)
-# 한국어 증권·주가 패턴
+# NOISE_SOURCES — 도메인 기반 차단
+NOISE_SOURCES = [
+    "openpr", "prnewswire", "businesswire", "globenewswire", "einpresswire",
+    "accesswire", "prnews", "prlog", "marketwired", "newswire", "pr.com", "prweb",
+    "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
+    "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
+    "msn", "msn.com",
+    "aol.com",          # 오래된 기사 재배포
+    "simplywall.st",    # 개인투자자 주식 분석
+    "futunn.com",       # 주식 투자 플랫폼
+]
+
+# NOISE_URL_PATHS — URL 경로 기반 차단 (도메인 무관)
+NOISE_URL_PATHS = [
+    "/stock/",
+    "/en/stock/",
+    "/stocks/",
+    "/share-price/",
+    "/equity/",
+]
+
+# 정규식 기반 주가·증권 노이즈 필터
 _NOISE_RE_KO = re.compile(
     r'(목표\s*주가|목표가)\s*(상향|하향|제시|유지|\d+만원|\d+달러|\d+억)'
     r'|\d+만원\s*(목표|하향|상향)'
@@ -316,10 +344,11 @@ _NOISE_RE_KO = re.compile(
     r'|(코스닥|코스피)\s*(거래량|상위|순위)'
     r'|수익률.{0,10}(주가|투자|%)'
     r'|(애널리스트|analyst).{0,15}(전망|목표|제시|rating|target)'
+    r'|\[IR\]|\[ir\]'               # [IR] 공시 태그
+    r'|IR공시|IR\s*행사'
     , re.IGNORECASE
 )
 
-# 영어 증권·주가 패턴
 _NOISE_RE_EN = re.compile(
     r'(raises?|cuts?|lifts?|lowers?|maintains?|reiterates?)\s*(price\s*)?target'
     r'|price\s*target\s*(raised|cut|lifted|lowered|increased|decreased)'
@@ -328,22 +357,14 @@ _NOISE_RE_EN = re.compile(
     r'|stock\s*(surges?|soars?|falls?|drops?|rises?|climbs?)\s*\d+\s*%'
     r'|shares\s*(up|down)\s*\d+\s*%'
     r'|(bank of america|goldman sachs|morgan stanley|jpmorgan|daiwa|macquarie|barclays|ubs|citigroup)\s*(raises?|cuts?|initiates?|target)'
+    r'|investor\s*(relations|day|briefing)'   # IR 이벤트
+    r'|earnings\s*call\s*transcript'          # 컨퍼런스콜 전문 (분량 많고 노이즈)
     , re.IGNORECASE
 )
 
 def is_stock_noise(title: str) -> bool:
-    """주가·증권 리포트 노이즈 여부 판별"""
+    """주가·증권 리포트·IR 노이즈 여부 판별"""
     return bool(_NOISE_RE_KO.search(title) or _NOISE_RE_EN.search(title))
-
-NOISE_SOURCES = [
-    "openpr", "prnewswire", "businesswire", "globenewswire", "einpresswire",
-    "accesswire", "prnews", "prlog", "marketwired", "newswire", "pr.com", "prweb",
-    "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
-    "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
-    "msn", "msn.com",
-    "aol.com",          # 오래된 기사 재배포 잦음
-    "simplywall.st",    # 개인투자자용 주식 분석 사이트
-]
 
 WHITELIST = [
     # ── 공통 배터리·재활용 ──
@@ -376,11 +397,9 @@ WHITELIST = [
     "is eco solution", "fortum", "stena",
 
     # ── 셀 제조사 ──
-    "samsung",              # samsung sdi 포함, 헝가리어 기사 대응
-    "sk온",                 # 한국어 표기
-    "sk on",                # 영문 표기
-    "lg에너지솔루션",
-    "lg energy solution",
+    "samsung",
+    "sk온", "sk on",
+    "lg에너지솔루션", "lg energy solution",
     "삼성sdi",
     "catl", "byd", "panasonic", "northvolt",
 
@@ -435,7 +454,6 @@ def parse_date(pub_str):
         return None
 
 def extract_real_url(url):
-    """구글 리다이렉트 URL에서 실제 URL 추출"""
     if "google.com/url" in url:
         match = re.search(r'[?&]url=([^&]+)', url)
         if match:
@@ -456,6 +474,7 @@ def collect_rss():
     for item in QUERIES:
         is_smm = "direct_url" in item
         cutoff = cutoff_72h if is_smm else cutoff_48h
+        is_priority = item.get("priority", False)
 
         try:
             if is_smm:
@@ -515,13 +534,23 @@ def collect_rss():
                 lower_source = source.lower()
                 lower_link   = link.lower()
 
-                if any(k in lower_title for k in NOISE_KEYWORDS):
-                    continue
-                if is_stock_noise(title):   # 정규식 기반 주가·증권 노이즈 필터
-                    continue
+                # 노이즈 소스 차단
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
 
+                # URL 경로 기반 차단 (주식 섹션)
+                if any(p in lower_link for p in NOISE_URL_PATHS):
+                    continue
+
+                # 노이즈 키워드 차단
+                if any(k in lower_title for k in NOISE_KEYWORDS):
+                    continue
+
+                # 정규식 기반 주가·증권·IR 노이즈 차단
+                if is_stock_noise(title):
+                    continue
+
+                # WHITELIST 체크 (SMM Metal 제외)
                 if source != "SMM Metal":
                     if not any(w in lower_title for w in WHITELIST):
                         continue
@@ -530,7 +559,8 @@ def collect_rss():
                 raw.append({
                     "title": title, "link": link, "source": source,
                     "pub": pub_str, "pub_date": pub_date,
-                    "lang": item.get("lang", "en"), "snippet": snippet
+                    "lang": item.get("lang", "en"), "snippet": snippet,
+                    "priority": is_priority,
                 })
 
             time.sleep(0.12)
@@ -539,18 +569,37 @@ def collect_rss():
 
     raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
+    # 중복 제거 — 동일 기업 동일 날짜 max 3건 제한
+    company_day_count = {}
     deduped = []
     for a in raw:
+        title_lower = a["title"].lower()
+        pub_day = a["pub_date"].strftime("%Y-%m-%d") if a.get("pub_date") else "unknown"
+
+        # 제목 유사도 중복 체크
         words = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
         is_dup = any(
             len(words & {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}) >= 3
             for b in deduped
         )
+        if is_dup:
+            continue
+
+        # 동일 기업 당일 기사 max 3건
+        for company in ["lg에너지솔루션", "sk온", "삼성sdi", "에코프로비엠", "catl", "byd"]:
+            if company in title_lower:
+                key = f"{company}_{pub_day}"
+                company_day_count[key] = company_day_count.get(key, 0) + 1
+                if company_day_count[key] > 3:
+                    is_dup = True
+                break
+
         if not is_dup:
             deduped.append(a)
 
     smm_count = sum(1 for a in deduped if "SMM" in a.get("source", ""))
-    print(f"수집: {len(raw)}건 → 중복 제거 후: {len(deduped)}건 (SMM: {smm_count}건)")
+    priority_count = sum(1 for a in deduped if a.get("priority"))
+    print(f"수집: {len(raw)}건 → 중복 제거 후: {len(deduped)}건 (SMM: {smm_count}건, 시황매체: {priority_count}건)")
     return deduped
 
 # ============================================================
@@ -591,25 +640,32 @@ async def get_real_url(page, cbm_url):
 
 # ============================================================
 # 본문 수집
-# - 성일하이텍 기사: 건수 무관 전량 포함
-# - SMM 최대 2건 + 나머지 슬롯을 일반 기사로 채움 (총 17건 상한)
+# 우선순위:
+#   1. 성일하이텍 기사 — 전량 필수 포함
+#   2. 시황 전문 매체(SMM·Fastmarkets·BMI·S&P) — 최대 3건
+#   3. 일반 기사 — 나머지 슬롯 채움 (총 17건 상한)
 # ============================================================
 async def enrich_articles(articles):
     smm = [a for a in articles if "SMM" in a.get("source", "")][:2]
 
-    sungeel_keywords = ["성일하이텍", "sungeel", "성일"]
+    sungeel_kw = ["성일하이텍", "sungeel", "성일"]
     sungeel = [a for a in articles
                if "SMM" not in a.get("source", "")
-               and any(k in a["title"].lower() for k in sungeel_keywords)]
+               and any(k in a["title"].lower() for k in sungeel_kw)]
+
+    priority = [a for a in articles
+                if a.get("priority") and "SMM" not in a.get("source", "")
+                and a not in sungeel][:3]
 
     general_pool = [a for a in articles
-                    if "SMM" not in a.get("source", "") and a not in sungeel]
-    general_limit = max(0, 15 - len(sungeel))
+                    if "SMM" not in a.get("source", "")
+                    and a not in sungeel and a not in priority]
+    general_limit = max(0, 15 - len(sungeel) - len(priority))
     general = general_pool[:general_limit]
 
-    targets = smm + sungeel + general
+    targets = smm + sungeel + priority + general
 
-    print(f"\n본문 추출 대상: SMM {len(smm)}건 + 성일 {len(sungeel)}건 + 일반 {len(general)}건 = {len(targets)}건")
+    print(f"\n본문 추출 대상: SMM {len(smm)}건 + 성일 {len(sungeel)}건 + 시황매체 {len(priority)}건 + 일반 {len(general)}건 = {len(targets)}건")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -699,9 +755,11 @@ def analyze(articles):
 - 아래 유형은 절대 포함 금지:
   · 증권사 목표주가·투자의견·리포트 (예: "KB증권 목표가 상향", "Morgan Stanley raises target")
   · 단순 주가 등락·거래량 기사 (예: "SK온 주가 5% 급등", "삼성SDI 52주 신고가")
-  · 유상증자·전환사채·IR 행사 기사
+  · IR 공시·IR 행사·컨퍼런스콜 전문 기사
+  · 유상증자·전환사채 기사
   · ETF 관련 기사
-  · 학술 보도자료·PR 배포
+  · 자동차 신차 스펙·리뷰 기사 (배터리 공급망과 무관한 것)
+  · PR 배포·학술 보도자료
 
 [요약 작성 기준 — 가장 중요]
 - 3문장 이내 자유 서술형으로 작성
@@ -830,8 +888,8 @@ def build_email(data):
 <body style="margin:0;padding:16px;background:#eef0f3;">
 <div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic','맑은 고딕',Arial,sans-serif;">
   <div style="background:#0f2744;padding:22px 28px;">
-    <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF {session}</p>
-    <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
+    <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
+    <p style="color:#90b4d8;font-size:12px;margin:0;">{today} {session}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{articles_html}</div>
@@ -842,7 +900,7 @@ def build_email(data):
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">{insights_html}</div>
   </div>
   <div style="background:#0f2744;padding:14px 28px;text-align:center;">
-    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief {session}&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
+    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today} {session}</p>
     <p style="color:#7ea8d4;font-size:10px;margin:5px 0 0;">(c) Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
   </div>
 </div>
@@ -856,7 +914,7 @@ def send_email(html_body):
     kst_hour = (datetime.utcnow().hour + 9) % 24
     session  = "AM" if kst_hour < 12 else "PM"
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[배터리 산업 Daily Brief {session}] {today}"
+    msg["Subject"] = f"[배터리 산업 Daily Brief] {today} {session}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
