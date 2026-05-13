@@ -24,9 +24,9 @@ BCC_EMAIL      = os.environ.get('BCC_EMAIL', '')
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ============================================================
-# ★ NEW: SMM 시세 설정
+# SMM 시세 설정
 # ============================================================
-VAT_RATE = 1.13  # 중국 증치세율
+VAT_RATE = 1.13
 
 SPOT_TARGETS = [
     {
@@ -69,7 +69,7 @@ FUTURES_TARGETS = [
 ]
 
 # ============================================================
-# RSS 쿼리 (기존 그대로)
+# RSS 쿼리
 # ============================================================
 QUERIES = [
     {"q": '("황산니켈" OR "황산코발트" OR "탄산리튬" OR "수산화리튬") ("가격" OR "시황" OR "공급")',
@@ -167,7 +167,7 @@ QUERIES = [
 ]
 
 # ============================================================
-# 노이즈 필터 (기존 그대로)
+# 노이즈 필터
 # ============================================================
 NOISE_KEYWORDS = [
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
@@ -316,7 +316,7 @@ WHITELIST = [
 ]
 
 # ============================================================
-# 유틸 (기존 그대로)
+# 유틸
 # ============================================================
 def decode_entities(text):
     return html_lib.unescape(text or "")
@@ -349,10 +349,9 @@ def extract_real_url(url):
     return url
 
 # ============================================================
-# ★ NEW: SMM 시세 수집
+# SMM 시세 수집
 # ============================================================
 def get_usd_cny_rate() -> float:
-    """당일 USD/CNY 환율 (Frankfurter API, 무료·키 불필요)"""
     try:
         resp = requests.get(
             "https://api.frankfurter.app/latest?from=USD&to=CNY",
@@ -377,8 +376,14 @@ async def _scrape_spot(page, target: dict) -> dict:
             r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*USD/t(?:onne)?", text)
         cny_list = re.findall(
             r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*yuan/t(?:onne)?", text)
-        change_m = re.search(r"([+\-][\d,]+\.?\d*)\(([+\-]?\d+\.?\d*%)\)", text)
-        date_m   = re.search(
+
+        # ★ FIX: findall로 전체 수집 후 0% 제외한 첫 번째 값 선택
+        # SMM은 VAT제외 USD 등락에 (0%)를 표시하는 경우가 있음
+        # 실제 가격 변동률은 CNY 기준 퍼센트가 의미 있음
+        all_pcts = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
+        change_pct = next((p for p in all_pcts if p != "0%"), "N/A")
+
+        date_m = re.search(
             r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
 
         usd_excl = float(usd_list[0].replace(",", "")) if usd_list else None
@@ -392,16 +397,16 @@ async def _scrape_spot(page, target: dict) -> dict:
 
         return {
             **base,
-            "date":         date_m.group(1) if date_m else "N/A",
-            "usd_excl":     usd_excl,
-            "cny_incl":     cny_incl,
-            "cny_excl":     cny_excl,
-            "usd_metal":    usd_metal,
-            "cny_metal":    cny_metal,
+            "date":          date_m.group(1) if date_m else "N/A",
+            "usd_excl":      usd_excl,
+            "cny_incl":      cny_incl,
+            "cny_excl":      cny_excl,
+            "usd_metal":     usd_metal,
+            "cny_metal":     cny_metal,
             "metal_content": mc,
-            "metal_label":  ml,
-            "change_pct":   change_m.group(2) if change_m else "N/A",
-            "status":       "OK",
+            "metal_label":   ml,
+            "change_pct":    change_pct,
+            "status":        "OK",
         }
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
@@ -410,22 +415,30 @@ async def _scrape_spot(page, target: dict) -> dict:
 async def _scrape_futures(page, target: dict) -> dict:
     base = {"name": target["name"], "ticker": target["ticker"]}
     try:
-        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(3000)
+        # ★ FIX: domcontentloaded → commit
+        # NI2606 등 일부 선물 페이지는 domcontentloaded가 JS 요청 완료까지 대기해
+        # 수 분간 hang 걸리는 현상 발생. commit은 첫 바이트 수신 즉시 반환.
+        # 가격 데이터는 SSR로 제공되므로 commit + 2s wait으로 충분함.
+        await page.goto(target["url"], wait_until="commit", timeout=15000)
+        await page.wait_for_timeout(2000)
         text = await page.inner_text("body")
 
         latest_m = re.search(r"Latest:\s*([\d,]+)", text)
-        change_m = re.search(r"([+\-][\d,]+)\s*\(([+\-]?\d+\.?\d*%)\)", text)
-        prev_m   = re.search(r"Prev\.Close\s*([\d,]+)", text)
-        vol_m    = re.search(r"Volume\s*([\d,]+)", text)
-        date_m   = re.search(
+
+        # ★ FIX: 동일하게 0% 제외
+        all_pcts_f = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
+        change_pct = next((p for p in all_pcts_f if p != "0%"), "N/A")
+
+        prev_m = re.search(r"Prev\.Close\s*([\d,]+)", text)
+        vol_m  = re.search(r"Volume\s*([\d,]+)", text)
+        date_m = re.search(
             r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
 
         return {
             **base,
             "date":       date_m.group(1) if date_m else "N/A",
             "latest":     int(latest_m.group(1).replace(",", "")) if latest_m else None,
-            "change_pct": change_m.group(2) if change_m else "N/A",
+            "change_pct": change_pct,
             "prev_close": int(prev_m.group(1).replace(",", "")) if prev_m else None,
             "volume":     vol_m.group(1) if vol_m else "N/A",
             "status":     "OK",
@@ -435,7 +448,6 @@ async def _scrape_futures(page, target: dict) -> dict:
 
 
 async def scrape_smm_prices() -> dict:
-    """SMM 현물·선물 시세 수집 (별도 Playwright 세션)"""
     spot_results, futures_results = [], []
     print("\n[SMM 시세 수집]")
     async with async_playwright() as p:
@@ -443,7 +455,7 @@ async def scrape_smm_prices() -> dict:
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
-        ctx  = await browser.new_context(
+        ctx = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -472,12 +484,10 @@ async def scrape_smm_prices() -> dict:
 
 
 def compute_spreads(price_data: dict) -> dict:
-    """탄산리튬·니켈 현선물 스프레드 계산"""
     spot_map    = {r["name"]: r for r in price_data["spot"]    if r["status"] == "OK"}
     futures_map = {r["ticker"]: r for r in price_data["futures"] if r["status"] == "OK"}
     spreads = {}
 
-    # 탄산리튬: 공업용 현물(CNY 증치세 제외) vs LC2609
     lc_s = spot_map.get("공업용 탄산리튬", {}).get("cny_excl")
     lc_f = futures_map.get("GFEX·LC2609", {}).get("latest")
     if lc_s and lc_f:
@@ -488,7 +498,6 @@ def compute_spreads(price_data: dict) -> dict:
             "structure": "백워데이션(현물>선물)" if diff > 0 else "콘탱고(선물>현물)",
         }
 
-    # 니켈: 황산니켈 Ni금속환산(CNY) vs NI2606
     ni_s = spot_map.get("배터리용 황산니켈", {}).get("cny_metal")
     ni_f = futures_map.get("SHFE·NI2606", {}).get("latest")
     if ni_s and ni_f:
@@ -502,7 +511,6 @@ def compute_spreads(price_data: dict) -> dict:
 
 
 def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> str:
-    """Gemini 프롬프트에 삽입할 시세 텍스트 블록"""
     lines = [f"수집 시각: {datetime.now().strftime('%H:%M')} KST | USD/CNY: {usd_cny:.2f}"]
 
     lines.append("\n[현물 Spot]")
@@ -539,7 +547,7 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
         s = spreads["니켈"]
         sign = "프리미엄" if s["spread"] > 0 else "디스카운트"
         lines.append(
-            f"  니켈: 황산니켈 Ni환산 ¥{s['spot_metal']:,.0f} vs SHFE NI2606 ¥{s['futures']:,.0f}"
+            f"  니켈: 황산니켈 Ni환산 ¥{s['spot_metal']:,.0f} vs NI2606 ¥{s['futures']:,.0f}"
             f" → 황산니켈이 SHFE 대비 {sign} {abs(s['spread_pct']):.1f}%"
             f" (차이 {s['spread']:+,.0f} CNY/t)"
         )
@@ -549,7 +557,7 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
     return "\n".join(lines)
 
 # ============================================================
-# RSS 수집 (기존 그대로)
+# RSS 수집
 # ============================================================
 def collect_rss():
     now = datetime.utcnow()
@@ -681,13 +689,16 @@ def collect_rss():
     return deduped
 
 # ============================================================
-# Jina / Playwright (기존 그대로)
+# Jina 본문 추출
 # ============================================================
 def fetch_body(real_url):
     try:
+        # ★ FIX: timeout을 (connect, read) 튜플로 분리
+        # connect는 10초, read는 45초 — 한국어 뉴스 사이트 응답 지연 대응
+        # 로직 자체는 변경 없음
         resp = requests.get(
             f"https://r.jina.ai/{real_url}",
-            timeout=25,
+            timeout=(10, 45),
             headers={"User-Agent": "Mozilla/5.0"}
         )
         if resp.status_code == 200:
@@ -696,6 +707,9 @@ def fetch_body(real_url):
         print(f"Jina 오류: {e}")
     return ""
 
+# ============================================================
+# Playwright URL 추출
+# ============================================================
 async def get_real_url(page, cbm_url):
     try:
         await page.goto(cbm_url, wait_until="commit", timeout=15000)
@@ -713,6 +727,9 @@ async def get_real_url(page, cbm_url):
         print(f"리다이렉트 실패: {e}")
     return None
 
+# ============================================================
+# 본문 수집
+# ============================================================
 _BATTERY_RELEVANCE_KW = [
     "battery", "배터리", "recycl", "재활용", "black mass", "블랙매스",
     "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
@@ -810,7 +827,7 @@ async def enrich_articles(articles):
     return targets
 
 # ============================================================
-# ★ MODIFIED: Gemini 분석 — price_data 주입
+# Gemini 분석
 # ============================================================
 def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
@@ -831,7 +848,6 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     smm_section     = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
     general_section = "\n\n".join(format_article(i, a) for i, a in enumerate(general_articles))
 
-    # ── 시세 섹션 구성 ──
     if price_data:
         spreads   = compute_spreads(price_data)
         price_str = format_price_for_prompt(price_data, usd_cny, spreads)
@@ -924,7 +940,13 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
                 prompt,
                 generation_config=generation_config
             )
-            return json.loads(response.text)
+            # ★ FIX: JSON 파싱 실패 시 마크다운 펜스 제거 후 재시도
+            try:
+                return json.loads(response.text)
+            except json.JSONDecodeError:
+                cleaned = re.sub(r"^```json\s*|\s*```$", "", response.text.strip())
+                return json.loads(cleaned)
+
         except Exception as ex:
             print(f"Gemini 오류 (시도 {attempt+1}/3): {ex}")
             if attempt < 2:
@@ -935,7 +957,7 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
     raise Exception("Gemini 분석 3회 모두 실패")
 
 # ============================================================
-# ★ NEW: 시세 HTML 블록
+# 시세 HTML 블록
 # ============================================================
 def _fmt(val, prefix="") -> str:
     if val is None:
@@ -948,7 +970,6 @@ def _pct_color(pct: str) -> str:
     return "#c0392b" if "+" in pct else "#2471a3"
 
 def build_price_section(price_data: dict, usd_cny: float) -> str:
-    """SECTION 0 HTML — 시세 테이블"""
     today   = datetime.now().strftime("%Y.%m.%d")
     spreads = compute_spreads(price_data)
 
@@ -965,7 +986,8 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         spot_rows += f"""
         <tr>
           <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;white-space:nowrap;">
-            <b style="font-size:12px;color:#0f2744;">{r['name']}</b>
+            <b style="font-size:12px;color:#0f2744;">{r['name']}</b><br>
+            <span style="font-size:10px;color:#bbb;">{r['name_en']}</span>
           </td>
           <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;color:#333;">
             {_fmt(r.get('usd_excl'), '$') if ok else '—'}<br>
@@ -989,8 +1011,8 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         fut_rows += f"""
         <tr>
           <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;white-space:nowrap;">
-            <b style="font-size:12px;color:#0f2744;">{r['name']}</b>
-            <span style="font-size:10px;color:#aaa;"> {r['ticker']}</span>
+            <b style="font-size:12px;color:#0f2744;">{r['name']}</b><br>
+            <span style="font-size:10px;color:#bbb;">{r['ticker']}</span>
           </td>
           <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;font-weight:700;color:#0f2744;" colspan="2">
             {_fmt(r.get('latest'), '¥') if ok else '—'}
@@ -1003,14 +1025,14 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
-    # 스프레드 배지
+    # ★ FIX: display:flex → inline-block (Gmail flex 미지원)
     spread_badges = ""
     if "탄산리튬" in spreads:
         s   = spreads["탄산리튬"]
         clr = "#c0392b" if s["spread"] > 0 else "#2471a3"
         spread_badges += (
-            f'<span style="background:{clr};color:#fff;font-size:10px;font-weight:700;'
-            f'padding:2px 7px;border-radius:10px;margin-right:6px;">'
+            f'<span style="display:inline-block;background:{clr};color:#fff;'
+            f'font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;margin-right:6px;">'
             f'LC2609 {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
         )
     if "니켈" in spreads:
@@ -1018,9 +1040,9 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         lbl = "프리미엄" if s["spread"] > 0 else "디스카운트"
         clr = "#c0392b" if s["spread"] > 0 else "#2471a3"
         spread_badges += (
-            f'<span style="background:{clr};color:#fff;font-size:10px;font-weight:700;'
-            f'padding:2px 7px;border-radius:10px;">'
-            f'NI2606 대비 Ni환산 {lbl} {abs(s["spread_pct"]):.1f}%</span>'
+            f'<span style="display:inline-block;background:{clr};color:#fff;'
+            f'font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">'
+            f'NI2606 Ni환산 {lbl} {abs(s["spread_pct"]):.1f}%</span>'
         )
 
     return f"""
@@ -1029,10 +1051,9 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     SECTION 0 &nbsp;/&nbsp; SMM 배터리 소재 시세
   </div>
   <div style="padding:14px 28px 10px;background:#f5f6f8;">
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                margin-bottom:8px;">
+    <div style="margin-bottom:8px;">
       <span style="font-size:11px;color:#888;">{today} · USD/CNY {usd_cny:.2f} · 증치세 제외 기준</span>
-      <span>{spread_badges}</span>
+      &nbsp;&nbsp;{spread_badges}
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;
                   border:1px solid #e0e4ea;border-radius:6px;overflow:hidden;">
@@ -1065,7 +1086,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
 """
 
 # ============================================================
-# ★ MODIFIED: 이메일 HTML 생성 — price_data 추가
+# 이메일 HTML 생성
 # ============================================================
 def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
@@ -1120,7 +1141,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
             f'{esc(ins)}</div>'
         )
 
-    # ── 시세 섹션 (있을 때만) ──
     price_html = build_price_section(price_data, usd_cny) if price_data else ""
 
     return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
@@ -1148,7 +1168,7 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
 </body></html>"""
 
 # ============================================================
-# Gmail 발송 (기존 그대로)
+# Gmail 발송
 # ============================================================
 def send_email(html_body):
     today = datetime.now().strftime("%Y년 %m월 %d일")
@@ -1166,35 +1186,27 @@ def send_email(html_body):
     print(f"발송 완료 → {TO_EMAIL} (BCC {len(bcc_list)}명)")
 
 # ============================================================
-# ★ MODIFIED: 메인 — SMM 시세 수집 추가
+# 메인
 # ============================================================
 async def main():
     print("=== BRDB 시작 ===")
 
-    # 1. 환율 조회
     usd_cny = get_usd_cny_rate()
 
-    # 2. SMM 시세 수집 (RSS와 병렬 가능하나 순차로 처리)
     price_data = None
     try:
         price_data = await scrape_smm_prices()
     except Exception as e:
         print(f"⚠ SMM 시세 수집 실패 ({e}) — 시세 없이 계속")
 
-    # 3. RSS 뉴스 수집
     articles = collect_rss()
     if not articles:
         print("기사 없음 - 종료")
         return
 
-    # 4. 본문 추출
     articles = await enrich_articles(articles)
-
-    # 5. Gemini 분석 (시세 + 뉴스 통합)
-    data = analyze(articles, price_data=price_data, usd_cny=usd_cny)
-
-    # 6. 이메일 생성 및 발송
-    html = build_email(data, price_data=price_data, usd_cny=usd_cny)
+    data     = analyze(articles, price_data=price_data, usd_cny=usd_cny)
+    html     = build_email(data, price_data=price_data, usd_cny=usd_cny)
     send_email(html)
     print("=== 완료 ===")
 
