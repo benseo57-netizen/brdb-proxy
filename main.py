@@ -69,8 +69,8 @@ QUERIES = [
     {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
-    # B-3. S&P Global
-    {"q": '"S&P Global" ("nickel" OR "cobalt" OR "lithium" OR "battery" OR "recycling")',
+    # B-3. S&P Global — 배터리·재활용·핵심광물 맥락으로 좁힘 (부동산·선박 등 차단)
+    {"q": '"S&P Global" ("battery" OR "recycling" OR "black mass" OR "lithium carbonate" OR "nickel sulfate" OR "cobalt sulfate" OR "EV battery")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
 
     # B-4. Benchmark Mineral Intelligence
@@ -91,7 +91,11 @@ QUERIES = [
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
     # C-3. 글로벌 메이저 재활용사 (영어)
-    {"q": '"Umicore" OR "Glencore" OR "Ascend Elements" OR "Redwood Materials"',
+    # Glencore는 코발트·니켈 공급사이지만 페로크롬 등 배터리 무관 기사도 많아 맥락 조건 추가
+    {"q": '("Ascend Elements" OR "Redwood Materials" OR "Umicore") ("battery" OR "recycling" OR "black mass" OR "cathode")',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+    {"q": '"Glencore" ("cobalt" OR "nickel" OR "battery recycling" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 
     # C-4. 북미 중소형 재활용사 (영어)
@@ -297,7 +301,18 @@ NOISE_KEYWORDS = [
     "[ir]", "ir공시", "ir]",
     # 증권사 리포트 전용 표현
     "뱅크 리포트",
+    "리포트 브리핑",     # [리포트 브리핑] 성일하이텍 증권사 보고서
+    "투자분석",          # 주달 등 개인투자자 투자분석 콘텐츠
+    "브랜드 평판",       # 브랜드평판 순위 기사
     "전환사채",
+    # 주가·수익률 관련
+    "share price",       # Nickel Industries share price and fundamentals
+    "fundamentals",      # 주식 펀더멘털 분석
+    "dividend",          # 배당 기사
+    "dividen",           # 인도네시아어 배당
+    # 배터리 무관 금속·산업
+    "ferrochrome",       # 페로크롬 (Glencore 기사에서 자주 등장, 배터리 무관)
+    "shadow fleet",      # 선박 관련 (S&P Global에서 등장)
     # 자동차 스펙·리뷰 (BYD 신차 기사 차단)
     "flagship sedan", "driving range", "test drive",
     "0-100km", "top speed", "horsepower",
@@ -318,9 +333,16 @@ NOISE_SOURCES = [
     "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
     "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
     "msn", "msn.com",
-    "aol.com",          # 오래된 기사 재배포
-    "simplywall.st",    # 개인투자자 주식 분석
-    "futunn.com",       # 주식 투자 플랫폼
+    "aol.com",            # 오래된 기사 재배포
+    "simplywall.st",      # 개인투자자 주식 분석
+    "futunn.com",         # 주식 투자 플랫폼
+    "judal.co.kr",        # 개인투자자 주식 투자분석 앱 (성일 투자분석 매일 올림)
+    "investingnews.com",  # PR 배포성 투자 뉴스
+    "thebull.com.au",     # 호주 주식 분석
+    "marketsmojo.com",    # 주식 수익률 분석
+    "switzer.com.au",     # 호주 개인투자 조언
+    "nai500.com",         # 투자 분석 플랫폼
+    "kalkinemedia.com",   # 주식 분석 미디어
 ]
 
 # NOISE_URL_PATHS — URL 경로 기반 차단 (도메인 무관)
@@ -330,6 +352,18 @@ NOISE_URL_PATHS = [
     "/stocks/",
     "/share-price/",
     "/equity/",
+]
+
+# 비배터리 재활용 차단 — AND 조건 (두 키워드 동시 등장 시 차단)
+NOISE_PAIRS = [
+    ("plastic", "recycl"),
+    ("alumin", "recycl"),
+    ("bauxite", "recycl"),
+    ("fiber", "recycl"),
+    ("packaging", "recycl"),
+    ("paper", "recycl"),
+    ("recycled film", "feedstock"),
+    ("scrap", "alumin"),
 ]
 
 # 정규식 기반 주가·증권 노이즈 필터
@@ -357,8 +391,11 @@ _NOISE_RE_EN = re.compile(
     r'|stock\s*(surges?|soars?|falls?|drops?|rises?|climbs?)\s*\d+\s*%'
     r'|shares\s*(up|down)\s*\d+\s*%'
     r'|(bank of america|goldman sachs|morgan stanley|jpmorgan|daiwa|macquarie|barclays|ubs|citigroup)\s*(raises?|cuts?|initiates?|target)'
-    r'|investor\s*(relations|day|briefing)'   # IR 이벤트
-    r'|earnings\s*call\s*transcript'          # 컨퍼런스콜 전문 (분량 많고 노이즈)
+    r'|investor\s*(relations|day|briefing)'
+    r'|earnings\s*call\s*transcript'
+    r'|leads?\s+stock\s+performance'          # Glencore leads stock performance 패턴
+    r'|share\s*price\s*and\s*fundamentals'    # Nickel Industries share price and fundamentals
+    r'|\d+\.?\d*%\s*(return|gain|rise)\s'     # 126.73% return 패턴
     , re.IGNORECASE
 )
 
@@ -546,6 +583,10 @@ def collect_rss():
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
 
+                # AND 조건 차단 — 비배터리 재활용 등
+                if any(a in lower_title and b in lower_title for a, b in NOISE_PAIRS):
+                    continue
+
                 # 정규식 기반 주가·증권·IR 노이즈 차단
                 if is_stock_noise(title):
                     continue
@@ -645,6 +686,25 @@ async def get_real_url(page, cbm_url):
 #   2. 시황 전문 매체(SMM·Fastmarkets·BMI·S&P) — 최대 3건
 #   3. 일반 기사 — 나머지 슬롯 채움 (총 17건 상한)
 # ============================================================
+# 배터리 관련성 판별 — priority pool 및 성일 우선순위 보조 필터
+_BATTERY_RELEVANCE_KW = [
+    "battery", "배터리", "recycl", "재활용", "black mass", "블랙매스",
+    "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
+    "cathode", "양극재", "precursor", "전구체",
+    "황산니켈", "황산코발트", "탄산리튬", "수산화리튬",
+    "nickel sulfate", "cobalt sulfate", "lithium carbonate",
+    "hpal", "hydromet", "lfp", "ev ", "electric vehicle",
+    "gigafactory", "feedstock", "scrap",
+    "nickel ore", "nikel", "tambang",   # 인도네시아어
+    "电池", "回收", "锂", "镍", "钴",   # 중국어
+    "akkumulátor",                       # 헝가리어
+]
+
+def is_battery_relevant(title: str) -> bool:
+    """배터리·재활용 산업 관련 기사 여부 판별 (priority pool 필터용)"""
+    lower = title.lower()
+    return any(k in lower for k in _BATTERY_RELEVANCE_KW)
+
 async def enrich_articles(articles):
     smm = [a for a in articles if "SMM" in a.get("source", "")][:2]
 
@@ -653,15 +713,26 @@ async def enrich_articles(articles):
                if "SMM" not in a.get("source", "")
                and any(k in a["title"].lower() for k in sungeel_kw)]
 
+    # 시황매체 priority 기사도 배터리 관련성 체크 — S&P Global 부동산·Glencore 페로크롬 차단
     priority = [a for a in articles
                 if a.get("priority") and "SMM" not in a.get("source", "")
-                and a not in sungeel][:3]
+                and a not in sungeel
+                and is_battery_relevant(a["title"])][:3]
 
+    # 일반 풀 — 재활용 기사(black mass, recycl, 블랙매스) 우선 배치
     general_pool = [a for a in articles
                     if "SMM" not in a.get("source", "")
                     and a not in sungeel and a not in priority]
+    recycling_boost = [a for a in general_pool
+                       if any(k in a["title"].lower()
+                              for k in ["battery recycl", "ev recycl", "black mass", "블랙매스",
+                                        "배터리 재활용", "폐배터리", "사용후배터리",
+                                        "hydromet", "hpal", "이차전지 재활용"])]
+    others = [a for a in general_pool if a not in recycling_boost]
+    general_pool_sorted = recycling_boost + others
+
     general_limit = max(0, 15 - len(sungeel) - len(priority))
-    general = general_pool[:general_limit]
+    general = general_pool_sorted[:general_limit]
 
     targets = smm + sungeel + priority + general
 
@@ -830,8 +901,6 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 # ============================================================
 def build_email(data):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
-    kst_hour = (datetime.utcnow().hour + 9) % 24
-    session  = "AM" if kst_hour < 12 else "PM"
     TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
     by_tag = {}
@@ -889,7 +958,7 @@ def build_email(data):
 <div style="max-width:660px;margin:0 auto;background:#fff;font-family:'Malgun Gothic','맑은 고딕',Arial,sans-serif;">
   <div style="background:#0f2744;padding:22px 28px;">
     <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
-    <p style="color:#90b4d8;font-size:12px;margin:0;">{today} {session}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
+    <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{articles_html}</div>
@@ -900,7 +969,7 @@ def build_email(data):
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">{insights_html}</div>
   </div>
   <div style="background:#0f2744;padding:14px 28px;text-align:center;">
-    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today} {session}</p>
+    <p style="color:#7ea8d4;font-size:11px;margin:0;">Battery Recycling Daily Brief&nbsp;&nbsp;|&nbsp;&nbsp;{today}</p>
     <p style="color:#7ea8d4;font-size:10px;margin:5px 0 0;">(c) Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
   </div>
 </div>
@@ -911,10 +980,8 @@ def build_email(data):
 # ============================================================
 def send_email(html_body):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
-    kst_hour = (datetime.utcnow().hour + 9) % 24
-    session  = "AM" if kst_hour < 12 else "PM"
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[배터리 산업 Daily Brief] {today} {session}"
+    msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
