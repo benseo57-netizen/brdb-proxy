@@ -24,267 +24,158 @@ BCC_EMAIL      = os.environ.get('BCC_EMAIL', '')
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ============================================================
-# RSS 쿼리
-# 설계 원칙:
-#   - 카테고리(A~K)별로 구분, 각 카테고리는 해당 기업/주제를 폭넓게 수집
-#   - 셀제조사는 Google -연산자로 증권 리포트·주가·IR 수집 단계부터 차단
-#   - 한국어 / 영어 / 중국어 / 일본어 / 인도네시아어 커버
+# ★ NEW: SMM 시세 설정
+# ============================================================
+VAT_RATE = 1.13  # 중국 증치세율
+
+SPOT_TARGETS = [
+    {
+        "name":          "황산코발트",
+        "name_en":       "Cobalt Sulphate",
+        "url":           "https://www-old.metal.com/Chemical-Compound/201102250381",
+        "metal_content": 0.205,
+        "metal_label":   "Co",
+    },
+    {
+        "name":          "배터리용 황산니켈",
+        "name_en":       "Battery-Grade Nickel Sulphate",
+        "url":           "https://www-old.metal.com/Nickel/201908270001",
+        "metal_content": 0.22,
+        "metal_label":   "Ni",
+    },
+    {
+        "name":    "공업용 탄산리튬",
+        "name_en": "Industrial-Grade Li₂CO₃",
+        "url":     "https://www-old.metal.com/lithium/201905160001",
+    },
+    {
+        "name":    "배터리용 탄산리튬",
+        "name_en": "Battery-Grade Li₂CO₃",
+        "url":     "https://www-old.metal.com/Lithium/201102250059",
+    },
+]
+
+FUTURES_TARGETS = [
+    {
+        "name":   "탄산리튬 선물",
+        "ticker": "GFEX·LC2609",
+        "url":    "https://www-old.metal.com/Lithium/lc2609",
+    },
+    {
+        "name":   "니켈 금속 선물",
+        "ticker": "SHFE·NI2606",
+        "url":    "https://www-old.metal.com/Nickel/ni2606",
+    },
+]
+
+# ============================================================
+# RSS 쿼리 (기존 그대로)
 # ============================================================
 QUERIES = [
-
-    # ════════════════════════════════════════
-    # A. 핵심광물 시황
-    # ════════════════════════════════════════
-
-    # A-1. 황산염·탄산염 가격 (한국어)
     {"q": '("황산니켈" OR "황산코발트" OR "탄산리튬" OR "수산화리튬") ("가격" OR "시황" OR "공급")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # A-2. 황산염·탄산염 가격 (영어)
     {"q": '("nickel sulfate" OR "cobalt sulfate" OR "lithium carbonate" OR "lithium hydroxide") ("price" OR "market" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # A-3. 니켈·코발트 원재료 (영어)
     {"q": '("nickel" OR "cobalt") ("battery" OR "supply chain") ("price" OR "shortage" OR "market" OR "index")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # A-4. 리튬 원재료 (영어)
     {"q": '"lithium" ("battery" OR "recycling") ("price" OR "spot" OR "supply" OR "shortage")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # A-5. 핵심광물 시황 (중국어)
     {"q": '("硫酸镍" OR "硫酸钴" OR "碳酸锂" OR "氢氧化锂") ("价格" OR "现货" OR "供应")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-
-
-    # ════════════════════════════════════════
-    # B. 시황 전문 매체 — 우선순위 풀로 별도 관리
-    # ════════════════════════════════════════
-
-    # B-1. SMM (Shanghai Metals Market)
     {"q": '"SMM" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery" OR "recycling")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-
-    # B-2. Fastmarkets
     {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-
-    # B-3. S&P Global — 배터리·재활용·핵심광물 맥락으로 좁힘 (부동산·선박 등 차단)
     {"q": '"S&P Global" ("battery" OR "recycling" OR "black mass" OR "lithium carbonate" OR "nickel sulfate" OR "cobalt sulfate" OR "EV battery")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-
-    # B-4. Benchmark Mineral Intelligence
     {"q": '"Benchmark Mineral Intelligence" OR "Benchmark Minerals" ("lithium" OR "battery" OR "cathode" OR "recycling")',
      "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-
-
-    # ════════════════════════════════════════
-    # C. 재활용사
-    # ════════════════════════════════════════
-
-    # C-1. 성일하이텍 직접 감시 (한국어)
     {"q": '"성일하이텍" OR "에코프로씨엔지" OR "아이에스티엠씨" OR "IS에코솔루션"',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # C-2. SungEel 영문명 감시 (영어)
     {"q": '"SungEel" OR "Sungeel HiTech" OR "IS Eco Solution"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # C-3. 글로벌 메이저 재활용사 (영어)
-    # Glencore는 코발트·니켈 공급사이지만 페로크롬 등 배터리 무관 기사도 많아 맥락 조건 추가
     {"q": '("Ascend Elements" OR "Redwood Materials" OR "Umicore") ("battery" OR "recycling" OR "black mass" OR "cathode")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
     {"q": '"Glencore" ("cobalt" OR "nickel" OR "battery recycling" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # C-4. 북미 중소형 재활용사 (영어)
     {"q": '"Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Princeton NuEnergy"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # C-5. 유럽 재활용사 (영어)
     {"q": '("Fortum" OR "Stena Recycling" OR "BASF") ("battery" OR "recycling" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # C-6. 블랙매스·스크랩 시장 (영어)
     {"q": '("black mass" OR "battery scrap" OR "feedstock") ("price" OR "shortage" OR "tender" OR "payables")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # C-7. 블랙매스·스크랩 시장 (한국어)
     {"q": '("블랙매스" OR "폐배터리 스크랩") ("입찰" OR "매입가" OR "공급")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-
-    # ════════════════════════════════════════
-    # D. 셀 제조사
-    # — Google -연산자로 증권 리포트·주가·IR 수집 단계부터 차단
-    # ════════════════════════════════════════
-
-    # D-1. SK온 (한국어)
     {"q": '"SK온" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # D-2. LG에너지솔루션 (한국어)
     {"q": '"LG에너지솔루션" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # D-3. 삼성SDI (한국어)
     {"q": '"삼성SDI" -목표주가 -목표가 -주가전망 -증권 -유상증자 -전환사채 -IR공시',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # D-4. 한국 3사 영문 (영어)
     {"q": '("SK On" OR "LG Energy Solution" OR "Samsung SDI") -"price target" -"analyst" -"rating" -"upgrades" -"downgrades"',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # D-5. CATL·BYD (영어) — 재활용·공급망 맥락으로 좁힘 (신차 리뷰 차단)
     {"q": '("CATL" OR "BYD") ("battery recycling" OR "cathode" OR "black mass" OR "supply chain" OR "gigafactory")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # D-6. CATL·BYD (중국어) — 재활용 맥락
     {"q": '("宁德时代" OR "比亚迪") ("电池回收" OR "回收" OR "黑粉" OR "原材料" OR "碳酸锂" OR "供应链")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-
-    # D-7. 파나소닉 (일본어)
     {"q": '"パナソニック" ("電池" OR "リサイクル" OR "リチウム" OR "EV")',
      "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
-
-    # D-8. Northvolt 자산 매각 (유럽 공급망 재편 추적)
     {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover" OR "insolvency")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-
-    # ════════════════════════════════════════
-    # E. 전구체 · 양극재
-    # ════════════════════════════════════════
-
-    # E-1. 전구체·양극재 메이커 (한국어)
     {"q": '("에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학") -목표주가 -목표가 -증권',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # E-2. 전구체·양극재 메이커 (영어)
     {"q": '("EcoPro BM" OR "L&F" OR "POSCO Future M" OR "LG Chem") ("precursor" OR "cathode" OR "battery")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # E-3. 일본 소재·전구체 (일본어)
     {"q": '("住友金属鉱山" OR "日亜化学") ("正極材" OR "前駆体" OR "リサイクル" OR "電池")',
      "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
-
-
-    # ════════════════════════════════════════
-    # F. 광산 · 원재료 공급
-    # ════════════════════════════════════════
-
-    # F-1. 리튬 광산 메이저 (영어)
     {"q": '("Albemarle" OR "SQM" OR "Ganfeng" OR "Tianqi") ("lithium" OR "mine" OR "production" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # F-2. 호주·칠레 리튬 광산 (영어)
     {"q": '("Pilbara Minerals" OR "Liontown" OR "Arcadium" OR "Sigma Lithium") ("lithium" OR "mine" OR "production" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # F-3. 인도네시아 니켈 (영어)
     {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # F-4. 인도네시아 니켈 (인도네시아어) — 현지 뉴스 직접 수집
     {"q": '("nikel" OR "HPAL" OR "RKEF") ("harga" OR "ekspor" OR "tambang" OR "produksi" OR "kuota")',
      "lang": "id", "gl": "ID", "ceid": "ID:id"},
-
-    # F-5. 콩고 코발트 광산 (영어)
     {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-
-    # ════════════════════════════════════════
-    # G. 기술 · 공정
-    # ════════════════════════════════════════
-
-    # G-1. 습식제련·HPAL (영어)
     {"q": '("hydrometallurgy" OR "hydromet" OR "HPAL") ("battery" OR "recycling" OR "nickel" OR "cobalt" OR "lithium")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # G-2. 건식제련·직접재활용 (영어)
     {"q": '("pyrometallurgy" OR "smelting" OR "direct recycling") ("battery" OR "black mass" OR "recycling")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # G-3. LFP 재활용 (영어) — 성일 전략 집중 분야
     {"q": '("LFP" OR "lithium iron phosphate") ("recycling" OR "recovery" OR "black mass")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # G-4. 습식·건식 제련 (한국어)
     {"q": '("습식제련" OR "건식제련" OR "HPAL" OR "직접재활용") ("배터리" OR "재활용" OR "블랙매스")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-
-    # ════════════════════════════════════════
-    # H. 정책 · 규제
-    # ════════════════════════════════════════
-
-    # H-1. EU 배터리 규제 (영어)
     {"q": '("EU Battery Regulation" OR "Battery Passport" OR "recycled content" OR "battery directive") ("compliance" OR "deadline" OR "standard")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # H-2. 미국 정책 (영어)
     {"q": '("IRA" OR "OBBBA" OR "critical minerals") ("battery" OR "recycling" OR "supply chain")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # H-3. 인도 정책 (영어)
     {"q": '"India" ("battery recycling" OR "EPR" OR "black mass" OR "CPCB" OR "critical mineral")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # H-4. 한국 정책 (한국어)
     {"q": '("이차전지" OR "사용후배터리" OR "폐배터리") ("EPR" OR "핵심광물" OR "순환이용" OR "재활용 의무" OR "생산자책임")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-    # H-5. 중국 배터리 재활용 정책 (중국어)
     {"q": '"动力电池回收" ("政策" OR "标准" OR "法规")',
      "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-
-
-    # ════════════════════════════════════════
-    # I. 투자 · M&A
-    # ════════════════════════════════════════
-
-    # I-1. 배터리 재활용 투자·M&A (영어)
     {"q": '"battery recycling" ("M&A" OR "acquisition" OR "joint venture" OR "investment" OR "funding")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-
-    # I-2. 배터리 재활용 투자·M&A (한국어)
     {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십" OR "인수" OR "합작")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-
-
-    # ════════════════════════════════════════
-    # J. 헝가리어 — 현지 법인 모니터링
-    # ════════════════════════════════════════
-
     {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
      "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
-
-
-    # ════════════════════════════════════════
-    # K. SMM Metal Google Alerts 피드 (백업용)
-    # ════════════════════════════════════════
-
     {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879",
      "lang": "en"},
 ]
 
 # ============================================================
-# 노이즈 필터
+# 노이즈 필터 (기존 그대로)
 # ============================================================
 NOISE_KEYWORDS = [
-    # 가상화폐·NFT
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
-    # 엔터·소비자
     "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
     "stock tip", "smartwatch",
-    # ETF
     "battery etf", "lithium etf",
-    # 주가 접두사·투자 타이밍 분석
     "stocks:",
     "is it too late",
-    # 단순 주가 등락
     "stock surges", "stock falls", "stock rises", "stock drops",
     "shares surge", "shares fall",
     "주가 상승", "주가 하락", "주가 급등", "주가 급락",
@@ -297,55 +188,45 @@ NOISE_KEYWORDS = [
     "52주 신고가", "52주 신저가",
     "상한가", "하한가",
     "거래량 상위",
-    # IR 공시
     "[ir]", "ir공시", "ir]",
-    # 증권사 리포트 전용 표현
     "뱅크 리포트",
-    "리포트 브리핑",     # [리포트 브리핑] 성일하이텍 증권사 보고서
-    "투자분석",          # 주달 등 개인투자자 투자분석 콘텐츠
-    "브랜드 평판",       # 브랜드평판 순위 기사
+    "리포트 브리핑",
+    "투자분석",
+    "브랜드 평판",
     "전환사채",
-    # 주가·수익률 관련
-    "share price",       # Nickel Industries share price and fundamentals
-    "fundamentals",      # 주식 펀더멘털 분석
-    "dividend",          # 배당 기사
-    "dividen",           # 인도네시아어 배당
-    # 배터리 무관 금속·산업
-    "ferrochrome",       # 페로크롬 (Glencore 기사에서 자주 등장, 배터리 무관)
-    "shadow fleet",      # 선박 관련 (S&P Global에서 등장)
-    # 자동차 스펙·리뷰 (BYD 신차 기사 차단)
+    "share price",
+    "fundamentals",
+    "dividend",
+    "dividen",
+    "ferrochrome",
+    "shadow fleet",
     "flagship sedan", "driving range", "test drive",
     "0-100km", "top speed", "horsepower",
-    # PR·학술
     "eurekaalert", "전자폐기물",
-    # 무관 산업
     "cassava", "agriculture", "crop",
     "petro", "petroleum", "oil refin",
     "dow jones", "s&p 500", "nasdaq",
-    # 동물 관련
     "blue whale season", "whale watching", "whale migration",
 ]
 
-# NOISE_SOURCES — 도메인 기반 차단
 NOISE_SOURCES = [
     "openpr", "prnewswire", "businesswire", "globenewswire", "einpresswire",
     "accesswire", "prnews", "prlog", "marketwired", "newswire", "pr.com", "prweb",
     "discoveryalert", "bravenewcoin", "eurekaalert", "cryptoslate", "coindesk",
     "benzinga", "seekingalpha", "motleyfool", "investopedia", "indexbox",
     "msn", "msn.com",
-    "aol.com",            # 오래된 기사 재배포
-    "simplywall.st",      # 개인투자자 주식 분석
-    "futunn.com",         # 주식 투자 플랫폼
-    "judal.co.kr",        # 개인투자자 주식 투자분석 앱 (성일 투자분석 매일 올림)
-    "investingnews.com",  # PR 배포성 투자 뉴스
-    "thebull.com.au",     # 호주 주식 분석
-    "marketsmojo.com",    # 주식 수익률 분석
-    "switzer.com.au",     # 호주 개인투자 조언
-    "nai500.com",         # 투자 분석 플랫폼
-    "kalkinemedia.com",   # 주식 분석 미디어
+    "aol.com",
+    "simplywall.st",
+    "futunn.com",
+    "judal.co.kr",
+    "investingnews.com",
+    "thebull.com.au",
+    "marketsmojo.com",
+    "switzer.com.au",
+    "nai500.com",
+    "kalkinemedia.com",
 ]
 
-# NOISE_URL_PATHS — URL 경로 기반 차단 (도메인 무관)
 NOISE_URL_PATHS = [
     "/stock/",
     "/en/stock/",
@@ -354,7 +235,6 @@ NOISE_URL_PATHS = [
     "/equity/",
 ]
 
-# 비배터리 재활용 차단 — AND 조건 (두 키워드 동시 등장 시 차단)
 NOISE_PAIRS = [
     ("plastic", "recycl"),
     ("alumin", "recycl"),
@@ -366,7 +246,6 @@ NOISE_PAIRS = [
     ("scrap", "alumin"),
 ]
 
-# 정규식 기반 주가·증권 노이즈 필터
 _NOISE_RE_KO = re.compile(
     r'(목표\s*주가|목표가)\s*(상향|하향|제시|유지|\d+만원|\d+달러|\d+억)'
     r'|\d+만원\s*(목표|하향|상향)'
@@ -378,7 +257,7 @@ _NOISE_RE_KO = re.compile(
     r'|(코스닥|코스피)\s*(거래량|상위|순위)'
     r'|수익률.{0,10}(주가|투자|%)'
     r'|(애널리스트|analyst).{0,15}(전망|목표|제시|rating|target)'
-    r'|\[IR\]|\[ir\]'               # [IR] 공시 태그
+    r'|\[IR\]|\[ir\]'
     r'|IR공시|IR\s*행사'
     , re.IGNORECASE
 )
@@ -393,25 +272,19 @@ _NOISE_RE_EN = re.compile(
     r'|(bank of america|goldman sachs|morgan stanley|jpmorgan|daiwa|macquarie|barclays|ubs|citigroup)\s*(raises?|cuts?|initiates?|target)'
     r'|investor\s*(relations|day|briefing)'
     r'|earnings\s*call\s*transcript'
-    r'|leads?\s+stock\s+performance'          # Glencore leads stock performance 패턴
-    r'|share\s*price\s*and\s*fundamentals'    # Nickel Industries share price and fundamentals
-    r'|\d+\.?\d*%\s*(return|gain|rise)\s'     # 126.73% return 패턴
+    r'|leads?\s+stock\s+performance'
+    r'|share\s*price\s*and\s*fundamentals'
+    r'|\d+\.?\d*%\s*(return|gain|rise)\s'
     , re.IGNORECASE
 )
 
 def is_stock_noise(title: str) -> bool:
-    """주가·증권 리포트·IR 노이즈 여부 판별"""
     return bool(_NOISE_RE_KO.search(title) or _NOISE_RE_EN.search(title))
 
 WHITELIST = [
-    # ── 공통 배터리·재활용 ──
     "battery", "배터리", "전지", "이차전지", "사용후배터리", "폐배터리",
     "recycl", "재활용", "순환이용",
-
-    # ── 핵심 금속 ──
     "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
-
-    # ── 소재·공정 ──
     "black mass", "블랙매스",
     "cathode", "양극재", "precursor", "전구체",
     "anode", "electrolyte", "feedstock", "scrap", "스크랩",
@@ -420,52 +293,30 @@ WHITELIST = [
     "hydrometallurgy", "hydromet", "hpal",
     "pyrometallurgy", "smelting", "습식제련", "건식제련",
     "lfp", "lithium iron phosphate",
-
-    # ── EV·인프라 ──
     "gigafactory", "kwh", "mwh", "ev ", "electric vehicle",
-
-    # ── 시황 전문 매체 ──
     "fastmarkets", "benchmark mineral", "s&p global", "smm",
-
-    # ── 재활용사 ──
     "sungeel", "성일",
     "ascend", "redwood", "cirba", "ecobat", "umicore", "glencore",
     "retriev", "battery resources", "interco", "princeton nuenergy",
     "is eco solution", "fortum", "stena",
-
-    # ── 셀 제조사 ──
     "samsung",
     "sk온", "sk on",
     "lg에너지솔루션", "lg energy solution",
     "삼성sdi",
     "catl", "byd", "panasonic", "northvolt",
-
-    # ── 전구체·양극재 메이커 ──
     "에코프로비엠", "에코프로", "포스코퓨처엠", "엘앤에프",
     "성일하이텍",
-
-    # ── 광산·원재료 공급사 ──
     "albemarle", "sqm", "ganfeng", "tianqi",
     "pilbara", "liontown", "arcadium", "sigma lithium",
-
-    # ── 정책 ──
     "circular economy", "생산자책임",
-
-    # ── 인도네시아어 (니켈 광산) ──
     "nikel", "tambang", "rkef",
-
-    # ── 헝가리어 ──
     "akkumulátor", "akkuhulladék",
-
-    # ── 중국어 ──
     "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
-
-    # ── 일본어 ──
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
 ]
 
 # ============================================================
-# 유틸
+# 유틸 (기존 그대로)
 # ============================================================
 def decode_entities(text):
     return html_lib.unescape(text or "")
@@ -498,7 +349,207 @@ def extract_real_url(url):
     return url
 
 # ============================================================
-# RSS 수집
+# ★ NEW: SMM 시세 수집
+# ============================================================
+def get_usd_cny_rate() -> float:
+    """당일 USD/CNY 환율 (Frankfurter API, 무료·키 불필요)"""
+    try:
+        resp = requests.get(
+            "https://api.frankfurter.app/latest?from=USD&to=CNY",
+            timeout=10
+        )
+        rate = resp.json()["rates"]["CNY"]
+        print(f"  환율: 1 USD = {rate:.4f} CNY")
+        return rate
+    except Exception as e:
+        print(f"  ⚠ 환율 조회 실패 ({e}), 기본값 7.25 적용")
+        return 7.25
+
+
+async def _scrape_spot(page, target: dict) -> dict:
+    base = {"name": target["name"], "name_en": target["name_en"]}
+    try:
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+        text = await page.inner_text("body")
+
+        usd_list = re.findall(
+            r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*USD/t(?:onne)?", text)
+        cny_list = re.findall(
+            r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*yuan/t(?:onne)?", text)
+        change_m = re.search(r"([+\-][\d,]+\.?\d*)\(([+\-]?\d+\.?\d*%)\)", text)
+        date_m   = re.search(
+            r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
+
+        usd_excl = float(usd_list[0].replace(",", "")) if usd_list else None
+        cny_incl = float(cny_list[0].replace(",", "")) if cny_list else None
+        cny_excl = round(cny_incl / VAT_RATE) if cny_incl else None
+
+        mc        = target.get("metal_content")
+        ml        = target.get("metal_label")
+        usd_metal = round(usd_excl / mc) if (usd_excl and mc) else None
+        cny_metal = round(cny_excl / mc) if (cny_excl and mc) else None
+
+        return {
+            **base,
+            "date":         date_m.group(1) if date_m else "N/A",
+            "usd_excl":     usd_excl,
+            "cny_incl":     cny_incl,
+            "cny_excl":     cny_excl,
+            "usd_metal":    usd_metal,
+            "cny_metal":    cny_metal,
+            "metal_content": mc,
+            "metal_label":  ml,
+            "change_pct":   change_m.group(2) if change_m else "N/A",
+            "status":       "OK",
+        }
+    except Exception as e:
+        return {**base, "status": f"ERROR: {e}"}
+
+
+async def _scrape_futures(page, target: dict) -> dict:
+    base = {"name": target["name"], "ticker": target["ticker"]}
+    try:
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+        text = await page.inner_text("body")
+
+        latest_m = re.search(r"Latest:\s*([\d,]+)", text)
+        change_m = re.search(r"([+\-][\d,]+)\s*\(([+\-]?\d+\.?\d*%)\)", text)
+        prev_m   = re.search(r"Prev\.Close\s*([\d,]+)", text)
+        vol_m    = re.search(r"Volume\s*([\d,]+)", text)
+        date_m   = re.search(
+            r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
+
+        return {
+            **base,
+            "date":       date_m.group(1) if date_m else "N/A",
+            "latest":     int(latest_m.group(1).replace(",", "")) if latest_m else None,
+            "change_pct": change_m.group(2) if change_m else "N/A",
+            "prev_close": int(prev_m.group(1).replace(",", "")) if prev_m else None,
+            "volume":     vol_m.group(1) if vol_m else "N/A",
+            "status":     "OK",
+        }
+    except Exception as e:
+        return {**base, "status": f"ERROR: {e}"}
+
+
+async def scrape_smm_prices() -> dict:
+    """SMM 현물·선물 시세 수집 (별도 Playwright 세션)"""
+    spot_results, futures_results = [], []
+    print("\n[SMM 시세 수집]")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        )
+        ctx  = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
+        page = await ctx.new_page()
+
+        for t in SPOT_TARGETS:
+            print(f"  현물: {t['name']} ...", end=" ", flush=True)
+            r = await _scrape_spot(page, t)
+            spot_results.append(r)
+            print("OK" if r["status"] == "OK" else f"⚠ {r['status']}")
+            await asyncio.sleep(2)
+
+        for t in FUTURES_TARGETS:
+            print(f"  선물: {t['ticker']} ...", end=" ", flush=True)
+            r = await _scrape_futures(page, t)
+            futures_results.append(r)
+            print("OK" if r["status"] == "OK" else f"⚠ {r['status']}")
+            await asyncio.sleep(2)
+
+        await browser.close()
+
+    return {"spot": spot_results, "futures": futures_results}
+
+
+def compute_spreads(price_data: dict) -> dict:
+    """탄산리튬·니켈 현선물 스프레드 계산"""
+    spot_map    = {r["name"]: r for r in price_data["spot"]    if r["status"] == "OK"}
+    futures_map = {r["ticker"]: r for r in price_data["futures"] if r["status"] == "OK"}
+    spreads = {}
+
+    # 탄산리튬: 공업용 현물(CNY 증치세 제외) vs LC2609
+    lc_s = spot_map.get("공업용 탄산리튬", {}).get("cny_excl")
+    lc_f = futures_map.get("GFEX·LC2609", {}).get("latest")
+    if lc_s and lc_f:
+        diff = lc_s - lc_f
+        spreads["탄산리튬"] = {
+            "spot": lc_s, "futures": lc_f,
+            "spread": diff, "spread_pct": diff / lc_f * 100,
+            "structure": "백워데이션(현물>선물)" if diff > 0 else "콘탱고(선물>현물)",
+        }
+
+    # 니켈: 황산니켈 Ni금속환산(CNY) vs NI2606
+    ni_s = spot_map.get("배터리용 황산니켈", {}).get("cny_metal")
+    ni_f = futures_map.get("SHFE·NI2606", {}).get("latest")
+    if ni_s and ni_f:
+        diff = ni_s - ni_f
+        spreads["니켈"] = {
+            "spot_metal": ni_s, "futures": ni_f,
+            "spread": diff, "spread_pct": diff / ni_f * 100,
+        }
+
+    return spreads
+
+
+def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> str:
+    """Gemini 프롬프트에 삽입할 시세 텍스트 블록"""
+    lines = [f"수집 시각: {datetime.now().strftime('%H:%M')} KST | USD/CNY: {usd_cny:.2f}"]
+
+    lines.append("\n[현물 Spot]")
+    for r in price_data["spot"]:
+        if r["status"] != "OK":
+            continue
+        metal_str = ""
+        if r.get("usd_metal"):
+            metal_str = f" | {r['metal_label']}금속환산: ${r['usd_metal']:,.0f}(USD) / ¥{r['cny_metal']:,.0f}(CNY)"
+        lines.append(
+            f"  {r['name']}: ${r['usd_excl']:,.0f}/t (황산염, 증치세제외)"
+            f"{metal_str}"
+            f" | CNY ¥{r['cny_excl']:,.0f}(증치세제외) / ¥{r['cny_incl']:,.0f}(포함)"
+            f" | 등락 {r['change_pct']}"
+        )
+
+    lines.append("\n[선물 Futures — CNY/t]")
+    for r in price_data["futures"]:
+        if r["status"] != "OK":
+            continue
+        lines.append(
+            f"  {r['name']} ({r['ticker']}): ¥{r['latest']:,.0f} ({r['change_pct']})"
+            f" | 전일종가 ¥{r.get('prev_close', 0):,.0f} | 거래량 {r.get('volume','N/A')}"
+        )
+
+    lines.append("\n[현선물 스프레드]")
+    if "탄산리튬" in spreads:
+        s = spreads["탄산리튬"]
+        lines.append(
+            f"  탄산리튬: 현물 ¥{s['spot']:,.0f} vs LC2609 ¥{s['futures']:,.0f}"
+            f" → {s['structure']} (차이 {s['spread']:+,.0f} CNY, {s['spread_pct']:+.1f}%)"
+        )
+    if "니켈" in spreads:
+        s = spreads["니켈"]
+        sign = "프리미엄" if s["spread"] > 0 else "디스카운트"
+        lines.append(
+            f"  니켈: 황산니켈 Ni환산 ¥{s['spot_metal']:,.0f} vs SHFE NI2606 ¥{s['futures']:,.0f}"
+            f" → 황산니켈이 SHFE 대비 {sign} {abs(s['spread_pct']):.1f}%"
+            f" (차이 {s['spread']:+,.0f} CNY/t)"
+        )
+    if not spreads:
+        lines.append("  (스프레드 계산 불가 — 데이터 수집 실패)")
+
+    return "\n".join(lines)
+
+# ============================================================
+# RSS 수집 (기존 그대로)
 # ============================================================
 def collect_rss():
     now = datetime.utcnow()
@@ -571,27 +622,16 @@ def collect_rss():
                 lower_source = source.lower()
                 lower_link   = link.lower()
 
-                # 노이즈 소스 차단
                 if any(s in lower_source or s in lower_link for s in NOISE_SOURCES):
                     continue
-
-                # URL 경로 기반 차단 (주식 섹션)
                 if any(p in lower_link for p in NOISE_URL_PATHS):
                     continue
-
-                # 노이즈 키워드 차단
                 if any(k in lower_title for k in NOISE_KEYWORDS):
                     continue
-
-                # AND 조건 차단 — 비배터리 재활용 등
                 if any(a in lower_title and b in lower_title for a, b in NOISE_PAIRS):
                     continue
-
-                # 정규식 기반 주가·증권·IR 노이즈 차단
                 if is_stock_noise(title):
                     continue
-
-                # WHITELIST 체크 (SMM Metal 제외)
                 if source != "SMM Metal":
                     if not any(w in lower_title for w in WHITELIST):
                         continue
@@ -610,14 +650,12 @@ def collect_rss():
 
     raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
-    # 중복 제거 — 동일 기업 동일 날짜 max 3건 제한
     company_day_count = {}
     deduped = []
     for a in raw:
         title_lower = a["title"].lower()
         pub_day = a["pub_date"].strftime("%Y-%m-%d") if a.get("pub_date") else "unknown"
 
-        # 제목 유사도 중복 체크
         words = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
         is_dup = any(
             len(words & {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}) >= 3
@@ -626,7 +664,6 @@ def collect_rss():
         if is_dup:
             continue
 
-        # 동일 기업 당일 기사 max 3건
         for company in ["lg에너지솔루션", "sk온", "삼성sdi", "에코프로비엠", "catl", "byd"]:
             if company in title_lower:
                 key = f"{company}_{pub_day}"
@@ -644,7 +681,7 @@ def collect_rss():
     return deduped
 
 # ============================================================
-# Jina로 본문 추출 (3,000자)
+# Jina / Playwright (기존 그대로)
 # ============================================================
 def fetch_body(real_url):
     try:
@@ -659,9 +696,6 @@ def fetch_body(real_url):
         print(f"Jina 오류: {e}")
     return ""
 
-# ============================================================
-# Playwright로 실제 URL 추출
-# ============================================================
 async def get_real_url(page, cbm_url):
     try:
         await page.goto(cbm_url, wait_until="commit", timeout=15000)
@@ -679,14 +713,6 @@ async def get_real_url(page, cbm_url):
         print(f"리다이렉트 실패: {e}")
     return None
 
-# ============================================================
-# 본문 수집
-# 우선순위:
-#   1. 성일하이텍 기사 — 전량 필수 포함
-#   2. 시황 전문 매체(SMM·Fastmarkets·BMI·S&P) — 최대 3건
-#   3. 일반 기사 — 나머지 슬롯 채움 (총 17건 상한)
-# ============================================================
-# 배터리 관련성 판별 — priority pool 및 성일 우선순위 보조 필터
 _BATTERY_RELEVANCE_KW = [
     "battery", "배터리", "recycl", "재활용", "black mass", "블랙매스",
     "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
@@ -695,13 +721,12 @@ _BATTERY_RELEVANCE_KW = [
     "nickel sulfate", "cobalt sulfate", "lithium carbonate",
     "hpal", "hydromet", "lfp", "ev ", "electric vehicle",
     "gigafactory", "feedstock", "scrap",
-    "nickel ore", "nikel", "tambang",   # 인도네시아어
-    "电池", "回收", "锂", "镍", "钴",   # 중국어
-    "akkumulátor",                       # 헝가리어
+    "nickel ore", "nikel", "tambang",
+    "电池", "回收", "锂", "镍", "钴",
+    "akkumulátor",
 ]
 
 def is_battery_relevant(title: str) -> bool:
-    """배터리·재활용 산업 관련 기사 여부 판별 (priority pool 필터용)"""
     lower = title.lower()
     return any(k in lower for k in _BATTERY_RELEVANCE_KW)
 
@@ -713,13 +738,11 @@ async def enrich_articles(articles):
                if "SMM" not in a.get("source", "")
                and any(k in a["title"].lower() for k in sungeel_kw)]
 
-    # 시황매체 priority 기사도 배터리 관련성 체크 — S&P Global 부동산·Glencore 페로크롬 차단
     priority = [a for a in articles
                 if a.get("priority") and "SMM" not in a.get("source", "")
                 and a not in sungeel
                 and is_battery_relevant(a["title"])][:3]
 
-    # 일반 풀 — 재활용 기사(black mass, recycl, 블랙매스) 우선 배치
     general_pool = [a for a in articles
                     if "SMM" not in a.get("source", "")
                     and a not in sungeel and a not in priority]
@@ -787,9 +810,9 @@ async def enrich_articles(articles):
     return targets
 
 # ============================================================
-# Gemini 분석
+# ★ MODIFIED: Gemini 분석 — price_data 주입
 # ============================================================
-def analyze(articles):
+def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     today     = datetime.now().strftime("%Y년 %m월 %d일")
     today_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -808,9 +831,30 @@ def analyze(articles):
     smm_section     = "\n\n".join(format_article(i, a) for i, a in enumerate(smm_articles))
     general_section = "\n\n".join(format_article(i, a) for i, a in enumerate(general_articles))
 
-    prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 시니어 애널리스트입니다. 아래 뉴스를 분석하여 JSON만 출력하세요.
+    # ── 시세 섹션 구성 ──
+    if price_data:
+        spreads   = compute_spreads(price_data)
+        price_str = format_price_for_prompt(price_data, usd_cny, spreads)
+        price_section = f"""
+━━━ [당일 SMM 시세 — 분석에 반드시 활용] ━━━
+{price_str}
+"""
+        price_insight_guide = """
+[시세-뉴스 통합 분석 — insights에 반드시 포함]
+- 탄산리튬 현선물 스프레드 해석: 백워데이션/콘탱고 여부와 시사점 (수급 타이트/완화, 투기 포지션 방향)
+- 황산니켈 현물 Ni환산가 vs SHFE NI2606 선물 비교: 프리미엄/디스카운트 해석
+- 황산코발트·황산니켈 Co/Ni 금속환산가 동향과 오늘 관련 뉴스 간 연관성
+- 성일하이텍의 원료 구매 타이밍 또는 제품 판매 전략에 대한 시사점 (시세 데이터 수치 직접 인용)
+- 시세와 뉴스를 연결한 단기 모멘텀 판단 (한 문장으로)
+"""
+    else:
+        price_section       = ""
+        price_insight_guide = ""
+
+    prompt = f"""당신은 리튬이온 배터리 재활용 산업 전문 시니어 애널리스트입니다. 아래 시세와 뉴스를 분석하여 JSON만 출력하세요.
 오늘 날짜: {today}
 
+{price_section}
 ━━━ [SMM Metal 시황 기사 — 최우선 포함, 최대 2건] ━━━
 {smm_section if smm_section else "오늘 SMM 기사 없음"}
 
@@ -824,36 +868,30 @@ def analyze(articles):
 - 성일하이텍 관련 기사는 반드시 포함
 - 배터리 재활용, 블랙매스, 원재료(Li/Ni/Co), 공급망, 정책·규제, 투자·M&A 우선
 - 아래 유형은 절대 포함 금지:
-  · 증권사 목표주가·투자의견·리포트 (예: "KB증권 목표가 상향", "Morgan Stanley raises target")
-  · 단순 주가 등락·거래량 기사 (예: "SK온 주가 5% 급등", "삼성SDI 52주 신고가")
+  · 증권사 목표주가·투자의견·리포트
+  · 단순 주가 등락·거래량 기사
   · IR 공시·IR 행사·컨퍼런스콜 전문 기사
   · 유상증자·전환사채 기사
   · ETF 관련 기사
-  · 자동차 신차 스펙·리뷰 기사 (배터리 공급망과 무관한 것)
+  · 자동차 신차 스펙·리뷰 기사
   · PR 배포·학술 보도자료
 
-[요약 작성 기준 — 가장 중요]
-- 3문장 이내 자유 서술형으로 작성
-- 본문에 등장하는 기관명·기업명·금액·수치·날짜는 빠짐없이 반영 (이것이 최우선)
+[요약 작성 기준]
+- 3문장 이내 자유 서술형
+- 본문에 등장하는 기관명·기업명·금액·수치·날짜는 빠짐없이 반영
 - 수치 없이 "~할 것으로 전망된다" 같은 추상적 요약 절대 금지
-- 기업명은 정식 전체 명칭 사용 (약칭 금지)
+- 기업명은 정식 전체 명칭 사용
 - 계획 발표 ≠ 실제 시작, MOU ≠ 계약, 검토 ≠ 확정 — 반드시 구분
-- 성일하이텍 관점은 강제하지 않음. 직접적 연관성이 명확할 때만 자연스럽게 언급
-- 나쁜 예: "리튬 시장이 공급 부족 국면에 진입할 것으로 전망된다."
-- 좋은 예: "Canaccord Genuity는 2026~2035년 구조적 리튬 공급부족을 경고했고, Morgan Stanley는 LCE 8만 톤, UBS는 2만 2천 톤 부족을 추정했다. 탄산리튬 현물가는 4월 23일 기준 1kg당 20.29달러로 연초 대비 2배 이상 반등했다."
-- 좋은 예2: "SK이노베이션 배터리 자회사 SK온이 헝가리 코마롬 2개 법인(자산 합계 7조 6천억 원)을 지리자동차그룹에 매각하는 방안을 협의 중이며, EU 산업가속화법(IAA)의 중국 지분 50% 상한 조항이 딜의 핵심 변수로 부상했다."
 
 [트렌드 3개 기준]
 - 한국/중국/미국·EU 지역별 균형
 - 오늘 기사의 특정 기업명·수치·정책명 직접 인용
 - 이 뉴스 없이는 쓸 수 없는 구체적 내용
-- 금지: '중요성이 부각된다', '필요성이 대두된다' 같은 일반론
 
 [시사점 4~5개 기준]
-- 성일하이텍(국내 최대 배터리 재활용, 블랙매스 생산 및 황산니켈·황산코발트·탄산리튬 판매) 관점
+- 성일하이텍(국내 최대 배터리 재활용, 블랙매스→황산니켈·황산코발트·탄산리튬 판매) 관점
 - 해외 법인(미국 인디애나, 폴란드, 헝가리, 인도, 말레이시아, 중국) 연계 검토
-- 오늘 기사의 구체적 기업명·수치·정책 직접 언급
-- 자연스러운 한국어 문장으로 작성
+{price_insight_guide}
 
 [출력: JSON만]
 {{
@@ -870,7 +908,7 @@ def analyze(articles):
   "insights": ["시사점"]
 }}
 
-articles: SMM 최대 2건 + 일반 기사 합산 총 8~12건 (동일 기업이라도 주제가 다르면 별도 포함).
+articles: SMM 최대 2건 + 일반 기사 합산 총 8~12건.
 trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
@@ -897,9 +935,139 @@ trends 3개(지역 균형). insights 4~5개. 모든 텍스트 한국어."""
     raise Exception("Gemini 분석 3회 모두 실패")
 
 # ============================================================
-# 이메일 HTML 생성
+# ★ NEW: 시세 HTML 블록
 # ============================================================
-def build_email(data):
+def _fmt(val, prefix="") -> str:
+    if val is None:
+        return "—"
+    return f"{prefix}{val:,.0f}"
+
+def _pct_color(pct: str) -> str:
+    if not pct or pct == "N/A":
+        return "#888"
+    return "#c0392b" if "+" in pct else "#2471a3"
+
+def build_price_section(price_data: dict, usd_cny: float) -> str:
+    """SECTION 0 HTML — 시세 테이블"""
+    today   = datetime.now().strftime("%Y.%m.%d")
+    spreads = compute_spreads(price_data)
+
+    spot_rows = ""
+    for r in price_data["spot"]:
+        ok  = r["status"] == "OK"
+        pct = r.get("change_pct", "N/A")
+        ml  = r.get("metal_label")
+        metal_cell = (
+            f"<b>{_fmt(r.get('usd_metal'), '$')}</b>"
+            f"<br><span style='color:#aaa;font-size:10px;'>{_fmt(r.get('cny_metal'), '¥')} CNY</span>"
+            if (ok and ml) else "—"
+        )
+        spot_rows += f"""
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;white-space:nowrap;">
+            <b style="font-size:12px;color:#0f2744;">{r['name']}</b>
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;color:#333;">
+            {_fmt(r.get('usd_excl'), '$') if ok else '—'}<br>
+            <span style="color:#aaa;font-size:10px;">{_fmt(r.get('cny_excl'), '¥')} CNY</span>
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;font-weight:700;color:#0f2744;">
+            {metal_cell}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:11px;color:#888;">
+            {_fmt(r.get('cny_incl'), '¥') if ok else '—'}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:12px;color:{_pct_color(pct)};">
+            {pct}
+          </td>
+        </tr>"""
+
+    fut_rows = ""
+    for r in price_data["futures"]:
+        ok  = r["status"] == "OK"
+        pct = r.get("change_pct", "N/A")
+        fut_rows += f"""
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;white-space:nowrap;">
+            <b style="font-size:12px;color:#0f2744;">{r['name']}</b>
+            <span style="font-size:10px;color:#aaa;"> {r['ticker']}</span>
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;font-weight:700;color:#0f2744;" colspan="2">
+            {_fmt(r.get('latest'), '¥') if ok else '—'}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:right;font-size:11px;color:#888;">
+            {_fmt(r.get('prev_close'), '¥') if ok else '—'}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:12px;color:{_pct_color(pct)};">
+            {pct}
+          </td>
+        </tr>"""
+
+    # 스프레드 배지
+    spread_badges = ""
+    if "탄산리튬" in spreads:
+        s   = spreads["탄산리튬"]
+        clr = "#c0392b" if s["spread"] > 0 else "#2471a3"
+        spread_badges += (
+            f'<span style="background:{clr};color:#fff;font-size:10px;font-weight:700;'
+            f'padding:2px 7px;border-radius:10px;margin-right:6px;">'
+            f'LC2609 {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
+        )
+    if "니켈" in spreads:
+        s   = spreads["니켈"]
+        lbl = "프리미엄" if s["spread"] > 0 else "디스카운트"
+        clr = "#c0392b" if s["spread"] > 0 else "#2471a3"
+        spread_badges += (
+            f'<span style="background:{clr};color:#fff;font-size:10px;font-weight:700;'
+            f'padding:2px 7px;border-radius:10px;">'
+            f'NI2606 대비 Ni환산 {lbl} {abs(s["spread_pct"]):.1f}%</span>'
+        )
+
+    return f"""
+  <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;
+              letter-spacing:1px;padding:7px 28px;">
+    SECTION 0 &nbsp;/&nbsp; SMM 배터리 소재 시세
+  </div>
+  <div style="padding:14px 28px 10px;background:#f5f6f8;">
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:8px;">
+      <span style="font-size:11px;color:#888;">{today} · USD/CNY {usd_cny:.2f} · 증치세 제외 기준</span>
+      <span>{spread_badges}</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;
+                  border:1px solid #e0e4ea;border-radius:6px;overflow:hidden;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 10px;text-align:left;font-size:11px;">품목</th>
+          <th style="padding:7px 10px;text-align:right;font-size:11px;">
+            황산염 USD/t<br><span style="font-weight:400;">(CNY 증치세제외)</span></th>
+          <th style="padding:7px 10px;text-align:right;font-size:11px;">
+            금속환산 USD/t<br><span style="font-weight:400;">(Co 20.5% / Ni 22%)</span></th>
+          <th style="padding:7px 10px;text-align:right;font-size:11px;">
+            CNY/t<br><span style="font-weight:400;">(증치세 포함)</span></th>
+          <th style="padding:7px 10px;text-align:center;font-size:11px;">등락</th>
+        </tr>
+      </thead>
+      <tbody>
+        {spot_rows}
+        <tr><td colspan="5" style="padding:4px 10px;background:#f0f4f8;
+                font-size:10px;font-weight:700;color:#666;letter-spacing:.5px;">
+          선물 (Futures, CNY/t) — 전일종가 기준
+        </td></tr>
+        {fut_rows}
+      </tbody>
+    </table>
+    <p style="margin:5px 0 0;color:#ccc;font-size:10px;">
+      출처: SMM (Shanghai Metals Market) · 증치세 제외 = 포함가 ÷ 1.13 ·
+      ※ SHFE NI2606은 니켈 금속 선물 (황산니켈 원가 참고지표)
+    </p>
+  </div>
+"""
+
+# ============================================================
+# ★ MODIFIED: 이메일 HTML 생성 — price_data 추가
+# ============================================================
+def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     today    = datetime.now().strftime("%Y년 %m월 %d일")
     TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
@@ -952,6 +1120,9 @@ def build_email(data):
             f'{esc(ins)}</div>'
         )
 
+    # ── 시세 섹션 (있을 때만) ──
+    price_html = build_price_section(price_data, usd_cny) if price_data else ""
+
     return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
 <body style="margin:0;padding:16px;background:#eef0f3;">
@@ -960,6 +1131,7 @@ def build_email(data):
     <p style="color:#fff;font-size:18px;font-weight:700;margin:0 0 4px;">BATTERY RECYCLING DAILY BRIEF</p>
     <p style="color:#90b4d8;font-size:12px;margin:0;">{today}&nbsp;&nbsp;|&nbsp;&nbsp;Battery Intelligence Report</p>
   </div>
+  {price_html}
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 1 &nbsp;/&nbsp; 분야별 핵심 기사</div>
   <div style="padding:16px 28px 8px;background:#f5f6f8;">{articles_html}</div>
   <div style="background:#1a3a5c;color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;padding:7px 28px;">SECTION 2 &nbsp;/&nbsp; 오늘의 산업 흐름</div>
@@ -976,10 +1148,10 @@ def build_email(data):
 </body></html>"""
 
 # ============================================================
-# Gmail 발송
+# Gmail 발송 (기존 그대로)
 # ============================================================
 def send_email(html_body):
-    today    = datetime.now().strftime("%Y년 %m월 %d일")
+    today = datetime.now().strftime("%Y년 %m월 %d일")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[배터리 산업 Daily Brief] {today}"
     msg["From"]    = GMAIL_USER
@@ -994,21 +1166,37 @@ def send_email(html_body):
     print(f"발송 완료 → {TO_EMAIL} (BCC {len(bcc_list)}명)")
 
 # ============================================================
-# 메인
+# ★ MODIFIED: 메인 — SMM 시세 수집 추가
 # ============================================================
 async def main():
     print("=== BRDB 시작 ===")
+
+    # 1. 환율 조회
+    usd_cny = get_usd_cny_rate()
+
+    # 2. SMM 시세 수집 (RSS와 병렬 가능하나 순차로 처리)
+    price_data = None
+    try:
+        price_data = await scrape_smm_prices()
+    except Exception as e:
+        print(f"⚠ SMM 시세 수집 실패 ({e}) — 시세 없이 계속")
+
+    # 3. RSS 뉴스 수집
     articles = collect_rss()
     if not articles:
         print("기사 없음 - 종료")
         return
 
+    # 4. 본문 추출
     articles = await enrich_articles(articles)
-    data     = analyze(articles)
-    html     = build_email(data)
+
+    # 5. Gemini 분석 (시세 + 뉴스 통합)
+    data = analyze(articles, price_data=price_data, usd_cny=usd_cny)
+
+    # 6. 이메일 생성 및 발송
+    html = build_email(data, price_data=price_data, usd_cny=usd_cny)
     send_email(html)
     print("=== 완료 ===")
 
 if __name__ == "__main__":
     asyncio.run(main())
-
