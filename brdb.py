@@ -46,16 +46,18 @@ FUTURES_EM = [
     {
         "name":      "탄산리튬 선물",
         "exchange":  "GFEX",
-        "url":       "https://quote.eastmoney.com/qihuo/lcm.html",
+        "url":       "https://www.metal.com/gfex",   # SMM GFEX 전용 페이지 (Playwright)
         "ticker":    "LCM",
-        "sina_code": "nf_LCM",   # Sina Finance hq API 코드
+        "method":    "playwright",
+        "sina_code": "nf_LCM",
     },
     {
         "name":      "니켈 선물",
         "exchange":  "SHFE",
-        "url":       "https://quote.eastmoney.com/qihuo/nim.html",
+        "url":       None,
         "ticker":    "NIM",
-        "sina_code": "nf_NIM",   # Sina Finance hq API 코드
+        "method":    "api",                           # SHFE 공식 결산가 API
+        "sina_code": "nf_NIM",
     },
 ]
 
@@ -183,6 +185,9 @@ NOISE_KEYWORDS = [
     "petro", "petroleum", "oil refin",
     "dow jones", "s&p 500", "nasdaq",
     "blue whale season", "whale watching", "whale migration",
+    "motorola", "samsung galaxy", "iphone", "ipad", "smartphone launch",
+    "foldable phone", "razr", "pixel phone", "snapdragon",
+    "launched in india", "goes on sale", "pre-order",
 ]
 
 NOISE_SOURCES = [
@@ -410,86 +415,134 @@ def _fetch_sina_price(sina_code: str) -> tuple:
         return None, "N/A"
 
 
-async def _scrape_em_futures(page, target: dict) -> dict:
-    """선물 주연 가격 수집.
-    1차: Sina Finance REST API (빠름, Playwright 불필요)
-    2차: Eastmoney Playwright — 25초 hard timeout (hang 방지)
+def _fetch_exchange_settlement(target: dict) -> tuple:
+    """거래소 공식 당일 결산가 API 수집 (Playwright 불필요).
+
+    SHFE (니켈): https://www.shfe.com.cn/data/dailydata/kx/kx{YYYYMMDD}.dat
+    GFEX (탄산리튬): http://www.gfex.com.cn 계열 API 시도
+
+    주계약 = 미결제약정(OPENINTEREST) 최대 계약.
+    Returns: (price_vat_incl: int | None, change_pct: str)
+    """
+    today = datetime.now().strftime("%Y%m%d")
+    exchange = target["exchange"]
+    product  = target["ticker"].lower()  # "lcm" or "nim"
+
+    # ── SHFE 니켈 ────────────────────────────────────────────────────
+    if exchange == "SHFE":
+        urls = [
+            f"https://www.shfe.com.cn/data/dailydata/kx/kx{today}.dat",
+            # 전날 데이터 fallback (주말/공휴일 등)
+            f"https://www.shfe.com.cn/data/dailydata/kx/kx{(datetime.now() - timedelta(days=1)).strftime('%Y%m%d')}.dat",
+        ]
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=10,
+                    headers={"Referer": "https://www.shfe.com.cn/",
+                             "User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                contracts = [
+                    x for x in data.get("o_curinstrument", [])
+                    if str(x.get("PRODUCTID", "")).strip().lower() == "ni"
+                    and float(x.get("SETTLEMENTPRICE") or 0) > 0
+                ]
+                if not contracts:
+                    continue
+                main = max(contracts, key=lambda x: float(x.get("OPENINTEREST") or 0))
+                settle = int(float(main["SETTLEMENTPRICE"]))
+                prev   = float(main.get("PRESETTLEMENTPRICE") or 0)
+                pct    = f"{(settle-prev)/prev*100:+.2f}%" if prev else "N/A"
+                month  = str(main.get("DELIVERYMONTH", "")).strip()
+                print(f"  SHFE 결산 NI{month}: {settle:,} CNY/t ({pct})")
+                return settle, pct
+            except Exception as e:
+                print(f"  SHFE API 오류: {e}")
+        return None, "N/A"
+
+    # ── GFEX 탄산리튬 ─────────────────────────────────────────────────
+    elif exchange == "GFEX":
+        # GFEX 공식 일별 결산가 엔드포인트 (여러 패턴 시도)
+        gfex_urls = [
+            f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
+            f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
+            f"https://www.gfex.com.cn/gfex/cjsj/historysettlementprice_list.shtml?variety=lc&trade_date={today}",
+        ]
+        for url in gfex_urls:
+            try:
+                resp = requests.get(url, timeout=10,
+                    headers={"Referer": "https://www.gfex.com.cn/",
+                             "User-Agent": "Mozilla/5.0",
+                             "Accept": "application/json, text/plain, */*"})
+                if resp.status_code != 200:
+                    continue
+                raw = resp.text.strip()
+                if not raw or len(raw) < 10:
+                    continue
+                # JSON 응답 시도
+                try:
+                    data = resp.json()
+                    contracts = data if isinstance(data, list) else data.get("data", [])
+                    contracts = [x for x in contracts
+                                 if float(x.get("settlementPrice") or x.get("SETTLEMENTPRICE") or 0) > 0]
+                    if not contracts:
+                        continue
+                    main   = max(contracts, key=lambda x: float(
+                        x.get("openInterest") or x.get("OPENINTEREST") or 0))
+                    settle = int(float(main.get("settlementPrice") or main.get("SETTLEMENTPRICE")))
+                    prev   = float(main.get("preSettlementPrice") or main.get("PRESETTLEMENTPRICE") or 0)
+                    pct    = f"{(settle-prev)/prev*100:+.2f}%" if prev else "N/A"
+                    print(f"  GFEX 결산 LC: {settle:,} CNY/t ({pct})")
+                    return settle, pct
+                except Exception:
+                    pass
+                # 숫자 파싱 fallback
+                nums = re.findall(r'\b(1[0-9]{4,5}|[5-9][0-9]{4})\b', raw)
+                if nums:
+                    settle = int(nums[0])
+                    print(f"  GFEX fallback LC: {settle:,}")
+                    return settle, "N/A"
+            except Exception as e:
+                print(f"  GFEX API 오류 ({url[:50]}): {e}")
+        print(f"  GFEX API 전체 실패 → N/A")
+        return None, "N/A"
+
+    return None, "N/A"
+
+
+async def _scrape_lcm_playwright(page, target: dict) -> dict:
+    """www.metal.com/gfex Playwright로 탄산리튬 선물 주계약 가격 수집.
+    GFEX 전용 페이지라 LC 가격대(100,000~300,000 CNY/t)가 다른 품목과 겹치지 않음.
     """
     display = f"{target['exchange']}·{target['ticker']}"
     base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
-    # ── 1차: Sina Finance API ──────────────────────────────────────
-    price, change_pct = _fetch_sina_price(target["sina_code"])
-    if price:
-        print(f"  Sina OK {display}: {price:,} (VAT포함)")
-        return {
-            **base,
-            "date":            datetime.now().strftime("%b %d, %Y"),
-            "latest":          price,
-            "latest_vat_excl": round(price / VAT_RATE),
-            "change_pct":      change_pct,
-            "prev_close":      None,
-            "status":          "OK",
-        }
+    try:
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
+        await page.wait_for_timeout(4000)
 
-    # ── 2차: Eastmoney Playwright (25초 hard limit) ─────────────────
-    print(f"  Sina 실패 → Playwright fallback {display}")
-
-    async def _pw_scrape():
-        await page.goto(target["url"], wait_until="domcontentloaded", timeout=20000)
-        await page.wait_for_timeout(5000)
-        result = await page.evaluate("""
+        price = await page.evaluate("""
             () => {
                 const text = document.body ? (document.body.innerText || '') : '';
-                const RANGE = { min: 30000, max: 600000 };
-
-                // ── 1순위: 우측 패널 레이블 기반 파싱 ──────────────────
-                // Eastmoney 期货 페이지 우측 패널에 "最新: 191760" 형태로 표시됨
-                const labelPatterns = [
-                    /最新[^\d]*(\d{4,7})/,      // 최신가
-                    /卖出价[^\d]*(\d{4,7})/,    // 호가(매도) ≒ 최신가
-                    /买入[^\d]*(\d{4,7})/,       // 호가(매수)
-                ];
-                for (const pat of labelPatterns) {
-                    const m = text.match(pat);
-                    if (m) {
-                        const n = parseInt(m[1]);
-                        if (n >= RANGE.min && n <= RANGE.max) return n;
-                    }
+                // LC 탄산리튬 현재 가격대: 100,000~300,000 CNY/t
+                // GFEX 다른 품목: 工业硅 8000~12000, 多晶硅 30000~50000 → 겹치지 않음
+                const nums = text.match(/[1-9]\\d{4,5}/g) || [];
+                for (const s of nums) {
+                    const n = parseInt(s);
+                    if (n >= 100000 && n <= 300000) return n;
                 }
-
-                // ── 2순위: 昨结算 + 涨跌 계산 ────────────────────────
-                // "昨结算: 201840" 과 "涨跌 -10080" 에서 현재가 역산
-                const prevM = text.match(/昨结算[^\d]*(\d{4,7})/);
-                const chgM  = text.match(/涨跌[^\d]*([-+]?\d{1,6})/);
-                if (prevM && chgM) {
-                    const prev = parseInt(prevM[1]);
-                    const chg  = parseInt(chgM[1]);
-                    const calc = prev + chg;
-                    if (calc >= RANGE.min && calc <= RANGE.max) return calc;
-                }
-
-                // ── 3순위: 昨收 + 涨跌 ───────────────────────────────
-                const prevCloseM = text.match(/昨收[^\d]*(\d{4,7})/);
-                if (prevCloseM && chgM) {
-                    const prev = parseInt(prevCloseM[1]);
-                    const chg  = parseInt(chgM[1]);
-                    const calc = prev + chg;
-                    if (calc >= RANGE.min && calc <= RANGE.max) return calc;
-                }
-
                 return null;
             }
         """)
-        return result
 
-    try:
-        price = await asyncio.wait_for(_pw_scrape(), timeout=25)
-        print(f"  Playwright {display}: price={price}")
+        text = await page.inner_text("body")
+        pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
+        change_pct = pct_m.group(1) if pct_m else "N/A"
+
+        print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
+
         if price:
-            text = await page.inner_text("body")
-            pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
-            change_pct = pct_m.group(1) if pct_m else "N/A"
             return {
                 **base,
                 "date":            datetime.now().strftime("%b %d, %Y"),
@@ -499,10 +552,32 @@ async def _scrape_em_futures(page, target: dict) -> dict:
                 "prev_close":      None,
                 "status":          "OK",
             }
-    except asyncio.TimeoutError:
-        print(f"  Playwright timeout {display}")
     except Exception as e:
-        print(f"  Playwright 오류 {display}: {e}")
+        print(f"  metal.com/gfex 오류: {e}")
+
+    return {**base, "status": "ERROR: 가격 파싱 실패"}
+
+
+def _scrape_nim_api(target: dict) -> dict:
+    """SHFE 공식 결산가 API로 니켈 주계약 가격 수집 (Playwright 불사용)."""
+    display = f"{target['exchange']}·{target['ticker']}"
+    base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
+
+    # 1차: Sina
+    price, change_pct = _fetch_sina_price(target["sina_code"])
+    if price:
+        print(f"  Sina OK {display}: {price:,}")
+        return {**base, "date": datetime.now().strftime("%b %d, %Y"),
+                "latest": price, "latest_vat_excl": round(price / VAT_RATE),
+                "change_pct": change_pct, "prev_close": None, "status": "OK"}
+
+    # 2차: SHFE 공식 API
+    print(f"  Sina 실패 → SHFE API {display}")
+    price, change_pct = _fetch_exchange_settlement(target)
+    if price:
+        return {**base, "date": datetime.now().strftime("%b %d, %Y"),
+                "latest": price, "latest_vat_excl": round(price / VAT_RATE),
+                "change_pct": change_pct, "prev_close": None, "status": "OK"}
 
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
@@ -533,10 +608,12 @@ async def scrape_smm_prices() -> dict:
 
         for t in FUTURES_EM:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
-            r = await _scrape_em_futures(page, t)
+            if t.get("method") == "playwright":
+                r = await _scrape_lcm_playwright(page, t)
+            else:
+                r = _scrape_nim_api(t)
             futures_results.append(r)
             print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
-            await asyncio.sleep(2)
 
         await browser.close()
 
@@ -932,9 +1009,12 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 [일반 뉴스]
 {gen_sec}
 
-[선별기준] 오늘({today_str}) 기사 최우선. 성일하이텍 반드시 포함.
-배터리재활용/블랙매스/Li.Ni.Co/공급망/정책/M&A 우선.
-금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/학술보도자료
+[필수 선별 규칙]
+- articles는 반드시 8건 이상 12건 이하로 선택. 4건·5건 등 부족한 경우 절대 금지.
+- 위 뉴스 목록에서 최대한 많이 선택. 관련도 낮아도 배터리/소재/공급망이면 포함.
+- 성일하이텍 기사 반드시 포함.
+- 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
+- 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사
 
 [요약기준] 3문장이내. 기관명.기업명.금액.수치.날짜 필수. 추상적요약금지.
 계획!=실행, MOU!=계약, 검토!=확정.
@@ -942,9 +1022,9 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 [트렌드3개] 한국/중국/미국EU 균형. 오늘기사 수치.정책명 직접인용.
 {price_guide}
 
-JSON:
+JSON (articles 최소8건 필수):
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
-articles 8~12건. trends 3개. insights 5개. 모든텍스트 한국어."""
+articles 최소8건~최대12건. trends 3개. insights 5개. 모든텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     cfg   = genai.GenerationConfig(response_mime_type="application/json", temperature=0.2)
