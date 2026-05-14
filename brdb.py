@@ -361,8 +361,8 @@ async def _scrape_futures_dynamic(page, target: dict) -> dict:
     base = {"name": target["name"], "exchange": target["exchange"]}
 
     try:
-        await page.goto(target["list_url"], wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(3000)
+        await page.goto(target["list_url"], wait_until="commit", timeout=30000)
+        await page.wait_for_timeout(1000)
     except Exception as e:
         return {**base, "ticker": "UNKNOWN", "status": f"ERROR: 리스트 접속 실패 {e}"}
 
