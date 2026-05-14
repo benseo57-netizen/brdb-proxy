@@ -1049,7 +1049,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
       </table>
       <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        출처: SMM (Shanghai Metals Market) · 증치세 제외 = 포함가 ÷ 1.13
+        출처: 현물 SMM (Shanghai Metals Market) · 선물 Eastmoney · 증치세 제외 = 포함가 ÷ 1.13
       </p>
     </td>
   </tr>"""
