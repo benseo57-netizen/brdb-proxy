@@ -627,6 +627,11 @@ def collect_rss():
                 if pub_date and pub_date < cutoff:
                     continue
 
+                # metal.com URL이면 SMM Metal 태그 강제 부여
+                # (Google Alerts 피드 타이밍 의존도 제거 + Google News 쿼리에서도 잡히도록)
+                if "metal.com" in link.lower():
+                    source = "SMM Metal"
+
                 lt = title.lower()
                 ls = source.lower()
                 ll = link.lower()
@@ -983,7 +988,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         if k in spreads:
             s      = spreads[k]
             clr    = "#c0392b" if s["spread"] > 0 else "#2563eb"
-            spacer = "<br>" if spread_badges else ""
+            spacer = "&nbsp;&nbsp;&nbsp;" if spread_badges else ""
             spread_badges += (
                 f'{spacer}<span style="display:inline-block;background:{clr};color:#ffffff;'
                 f'font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;">'
