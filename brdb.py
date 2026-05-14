@@ -41,7 +41,6 @@ SPOT_TARGETS = [
      "url": "https://www-old.metal.com/Lithium/201102250059"},
 ]
 
-# 선물: 리스트 페이지 + 탭 설정 (M 계약 자동 탐색)
 FUTURES_LIST_PAGES = [
     {
         "name":     "탄산리튬 선물",
@@ -410,6 +409,29 @@ async def _scrape_futures_dynamic(page, target: dict) -> dict:
     if not contract_href:
         return {**base, "ticker": "UNKNOWN", "status": "ERROR: M 계약 탐색 실패"}
 
+    m_found = await page.evaluate(f"""
+        () => {{
+            const prefix = '{prefix}';
+            const links = Array.from(document.querySelectorAll('a[href]'));
+            for (const link of links) {{
+                const href = link.getAttribute('href') || '';
+                if (!new RegExp(prefix + '\\d{{4}}', 'i').test(href)) continue;
+                const row = link.closest('tr') || link.parentElement;
+                if (!row) continue;
+                const rowHTML = row.innerHTML || '';
+                return /alt=['"]?M['"]?/i.test(rowHTML) ||
+                    /class=['"][^'"]*main[^'"]*['"]/i.test(rowHTML) ||
+                    Array.from(row.querySelectorAll('span,em,b,td,div')).some(
+                        el => el.children.length === 0 &&
+                              (el.textContent || '').trim().toUpperCase() === 'M'
+                    ) ||
+                    row.querySelector('[data-main]') !== null;
+            }}
+            return false;
+        }}
+    """)
+    print(f"  M마커: {'발견' if m_found else 'Fallback(첫번째계약)'}")
+
     ticker_m = re.search(rf"({prefix}\d{{4}})", contract_href, re.I)
     ticker   = ticker_m.group(1).upper() if ticker_m else "UNKNOWN"
     display  = f"{target['exchange']}·{ticker}"
@@ -627,8 +649,6 @@ def collect_rss():
                 if pub_date and pub_date < cutoff:
                     continue
 
-                # metal.com URL이면 SMM Metal 태그 강제 부여
-                # (Google Alerts 피드 타이밍 의존도 제거 + Google News 쿼리에서도 잡히도록)
                 if "metal.com" in link.lower():
                     source = "SMM Metal"
 
@@ -707,23 +727,28 @@ def fetch_body(real_url):
         print(f"Jina 오류: {e}")
     return ""
 
-def get_real_url(cbm_url: str) -> str | None:
+async def get_real_url(page, cbm_url):
     """
-    Google News CBMi redirect URL → 실제 기사 URL.
-    requests로 redirect 두 번 (?oc=5 → &hl=en-US... → 실제 URL) 안전하게 처리.
+    Google News CBMi URL → 실제 기사 URL (Playwright).
+    ?oc=5 → &hl=en-US... → 실제 URL 두 단계 redirect 처리.
+    page.goto interrupt 예외는 정상 흐름이므로 무시하고 wait_for_url로 계속.
     """
     try:
-        resp = requests.get(
-            cbm_url,
-            timeout=(5, 15),
-            allow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-        )
-        final = resp.url
-        if "news.google.com" not in final:
-            return final
-    except Exception as e:
-        print(f"URL 리졸브 실패: {e}")
+        await page.goto(cbm_url, wait_until="commit", timeout=15000)
+    except Exception:
+        # Google이 ?oc=5 → &hl=en-US... 로 redirect 시 Playwright가
+        # "interrupted by another navigation" 예외를 던짐 → 무시하고 계속
+        pass
+
+    try:
+        await page.wait_for_url(
+            lambda url: "news.google.com" not in url, timeout=10000)
+    except:
+        pass
+
+    final_url = page.url
+    if "news.google.com" not in final_url:
+        return final_url
     return None
 
 # ============================================================
@@ -768,41 +793,57 @@ async def enrich_articles(articles):
 
     print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+시황{len(priority)}+일반{len(general)}={len(targets)}건")
 
-    body_success = 0
-    body_snippet = 0
+    browser = None
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+            )
+            page = await browser.new_page()
+            await page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
 
-    for i, article in enumerate(targets):
-        print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
-        link = article["link"]
+            body_success = 0
+            body_snippet = 0
 
-        if "SMM" in article.get("source", "") or "news.google.com" not in link:
-            body = fetch_body(link)
-            if body:
-                article["body"] = body
-                body_success += 1
-                print(f"  OK Jina ({len(body)}자)")
-            else:
-                body_snippet += 1
-                print("  W 스니펫 사용")
-            continue
+            for i, article in enumerate(targets):
+                print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
+                link = article["link"]
 
-        # Google News CBMi redirect → requests로 실제 URL 추출 (Playwright 불필요)
-        real_url = get_real_url(link)
-        if real_url:
-            article["real_url"] = real_url
-            body = fetch_body(real_url)
-            article["body"] = body
-            if body:
-                body_success += 1
-                print(f"  OK {real_url[:65]} ({len(body)}자)")
-            else:
-                body_snippet += 1
-                print("  W 본문없음 스니펫")
-        else:
-            body_snippet += 1
-            print("  W 리다이렉트 실패 스니펫")
+                if "SMM" in article.get("source", "") or "news.google.com" not in link:
+                    body = fetch_body(link)
+                    if body:
+                        article["body"] = body
+                        body_success += 1
+                        print(f"  OK Jina ({len(body)}자)")
+                    else:
+                        body_snippet += 1
+                        print("  W 스니펫 사용")
+                    continue
 
-    print(f"\n본문결과: 성공{body_success}건 / 스니펫{body_snippet}건")
+                real_url = await get_real_url(page, link)
+                if real_url:
+                    article["real_url"] = real_url
+                    body = fetch_body(real_url)
+                    article["body"] = body
+                    if body:
+                        body_success += 1
+                        print(f"  OK {real_url[:65]} ({len(body)}자)")
+                    else:
+                        body_snippet += 1
+                        print("  W 본문없음 스니펫")
+                else:
+                    body_snippet += 1
+                    print("  W 리다이렉트 실패 스니펫")
+
+            print(f"\n본문결과: 성공{body_success}건 / 스니펫{body_snippet}건")
+        finally:
+            # ★ 수정: try-finally로 예외 발생 시에도 browser 반드시 종료
+            if browser:
+                await browser.close()
+
     return targets
 
 # ============================================================
@@ -902,18 +943,15 @@ def _pct_color(pct: str) -> str:
     return "#c0392b" if "+" in pct else "#2471a3"
 
 def _spot_label(name: str) -> str:
-    """표시용 품목명: 배터리용→BG, 공업용→TG (내부 데이터명은 그대로 유지)"""
     return name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
 
 def _fut_label(name: str) -> str:
-    """선물 표시명: ' 선물' 제거 (선물 섹션임을 구분선이 이미 표기)"""
     return name.replace(" 선물", "")
 
 def build_price_section(price_data: dict, usd_cny: float) -> str:
     today   = datetime.now().strftime("%Y.%m.%d")
     spreads = compute_spreads(price_data)
 
-    # ── 현물 행 ──────────────────────────────────────────────
     spot_rows = ""
     for r in price_data["spot"]:
         ok  = r["status"] == "OK"
@@ -948,7 +986,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
-    # ── 선물 행 ──────────────────────────────────────────────
     fut_rows = ""
     for r in price_data["futures"]:
         ok       = r["status"] == "OK"
@@ -976,7 +1013,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
-    # ── 배지: <br> 로 각자 한 줄씩 ──────────────────────────
     spread_badges = ""
     for k in ["탄산리튬", "니켈"]:
         if k in spreads:
@@ -989,7 +1025,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                 f'{s["ticker"]} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
             )
 
-    # ★ 좌우 패딩 최소화 → 테이블이 이메일 테두리에 가깝게
     return f"""
   <tr>
     <td bgcolor="#1e293b"
