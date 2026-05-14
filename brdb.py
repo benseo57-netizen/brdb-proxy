@@ -41,20 +41,19 @@ SPOT_TARGETS = [
      "url": "https://www-old.metal.com/Lithium/201102250059"},
 ]
 
-FUTURES_LIST_PAGES = [
+# 선물: Eastmoney 주연(主連) 페이지 — M계약 탐색 불필요, 항상 최근월 자동 롤링
+FUTURES_EM = [
     {
         "name":     "탄산리튬 선물",
         "exchange": "GFEX",
-        "list_url": "https://www-old.metal.com/Lithium",
-        "tab_text": "GFEX",
-        "prefix":   "lc",
+        "url":      "https://quote.eastmoney.com/qihuo/lcm.html",
+        "ticker":   "LCM",
     },
     {
-        "name":     "니켈 금속 선물",
+        "name":     "니켈 선물",
         "exchange": "SHFE",
-        "list_url": "https://www-old.metal.com/Nickel",
-        "tab_text": "SHFE",
-        "prefix":   "ni",
+        "url":      "https://quote.eastmoney.com/qihuo/nim.html",
+        "ticker":   "NIM",
     },
 ]
 
@@ -355,118 +354,89 @@ async def _scrape_spot(page, target: dict) -> dict:
         return {**base, "status": f"ERROR: {e}"}
 
 
-async def _scrape_futures_dynamic(page, target: dict) -> dict:
-    """선물 리스트 페이지에서 M(Main) 계약 자동 탐색 후 가격 수집."""
-    base = {"name": target["name"], "exchange": target["exchange"]}
+async def _scrape_em_futures(page, target: dict) -> dict:
+    """Eastmoney 주연(主連) 페이지에서 선물 최근월 가격 수집.
+    주연 = 자동 롤링 주계약이므로 M마커 탐색 불필요.
+    가격은 VAT 포함 기준 (÷1.13 = VAT 제외).
+    """
+    display = f"{target['exchange']}·{target['ticker']}"
+    base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
     try:
-        await page.goto(target["list_url"], wait_until="commit", timeout=30000)
-        await page.wait_for_timeout(1000)
-    except Exception as e:
-        return {**base, "ticker": "UNKNOWN", "status": f"ERROR: 리스트 접속 실패 {e}"}
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
 
-    try:
-        tab = page.get_by_text(target["tab_text"], exact=True).first
-        await tab.click(force=True)
-        await page.wait_for_timeout(2000)
-    except Exception:
-        pass
+        # JS 데이터 로드 대기 — 가격 element가 숫자로 바뀔 때까지 최대 12초
+        try:
+            await page.wait_for_function(
+                """() => {
+                    const body = document.body ? (document.body.innerText || '') : '';
+                    // 5만 이상 숫자가 페이지에 나타나면 로드 완료로 판단
+                    return /[1-9]\\d{4,6}/.test(body.replace(/[,，]/g, ''));
+                }""",
+                timeout=12000
+            )
+        except Exception:
+            await page.wait_for_timeout(5000)  # fallback: 5초 대기
 
-    prefix = target["prefix"]
-    contract_href = await page.evaluate(f"""
-        () => {{
-            const prefix = '{prefix}';
-            const links = Array.from(document.querySelectorAll('a[href]'));
-            for (const link of links) {{
-                const href = link.getAttribute('href') || '';
-                if (!new RegExp(prefix + '\\\\d{{4}}', 'i').test(href)) continue;
-                const row = link.closest('tr') || link.parentElement;
-                if (!row) continue;
-                const rowHTML = row.innerHTML || '';
-                const hasM = (
-                    /alt=['"]?M['"]?/i.test(rowHTML) ||
-                    /class=['"][^'"]*main[^'"]*['"]/i.test(rowHTML) ||
-                    Array.from(row.querySelectorAll('span,em,b,td,div')).some(
-                        el => el.children.length === 0 &&
-                              (el.textContent || '').trim().toUpperCase() === 'M'
-                    ) ||
-                    row.querySelector('[data-main]') !== null
-                );
-                if (hasM) return href;
-            }}
-            for (const link of links) {{
-                const href = link.getAttribute('href') || '';
-                if (!new RegExp(prefix + '\\\\d{{4}}', 'i').test(href)) continue;
-                const row = link.closest('tr') || link.parentElement;
-                if (!row) continue;
-                const rowText = (row.innerText || '').trim();
-                if (/\\d{{3,}}/.test(rowText) && !rowText.includes('--')) return href;
-            }}
-            return null;
-        }}
-    """)
+        # JS evaluate로 가격 탐색 — 여러 selector 시도 후 body text fallback
+        result = await page.evaluate("""
+            () => {
+                // Eastmoney qihuo 페이지의 일반적인 가격 selector 목록
+                const selectors = [
+                    '.zxj', '.cur_price', '.price', '.now',
+                    '[class*="price"]', '[class*="zxj"]', '[class*="cur"]',
+                    'em.red', 'em.green', 'b.red', 'b.green',
+                ];
+                const RANGE = { min: 30000, max: 600000 };
 
-    if not contract_href:
-        return {**base, "ticker": "UNKNOWN", "status": "ERROR: M 계약 탐색 실패"}
+                for (const sel of selectors) {
+                    try {
+                        const els = document.querySelectorAll(sel);
+                        for (const el of els) {
+                            const raw = (el.textContent || '').trim().replace(/[,，\\s]/g, '');
+                            const num = parseInt(raw);
+                            if (!isNaN(num) && num >= RANGE.min && num <= RANGE.max) {
+                                return { price: num, method: 'selector', sel };
+                            }
+                        }
+                    } catch(e) {}
+                }
 
-    m_found = await page.evaluate(f"""
-        () => {{
-            const prefix = '{prefix}';
-            const links = Array.from(document.querySelectorAll('a[href]'));
-            for (const link of links) {{
-                const href = link.getAttribute('href') || '';
-                if (!new RegExp(prefix + '\\d{{4}}', 'i').test(href)) continue;
-                const row = link.closest('tr') || link.parentElement;
-                if (!row) continue;
-                const rowHTML = row.innerHTML || '';
-                return /alt=['"]?M['"]?/i.test(rowHTML) ||
-                    /class=['"][^'"]*main[^'"]*['"]/i.test(rowHTML) ||
-                    Array.from(row.querySelectorAll('span,em,b,td,div')).some(
-                        el => el.children.length === 0 &&
-                              (el.textContent || '').trim().toUpperCase() === 'M'
-                    ) ||
-                    row.querySelector('[data-main]') !== null;
-            }}
-            return false;
-        }}
-    """)
-    print(f"  M마커: {'발견' if m_found else 'Fallback(첫번째계약)'}")
+                // Fallback: body text 에서 처음 나오는 해당 범위 숫자 추출
+                const lines = (document.body.innerText || '').split(/[\\n\\r]+/);
+                for (let i = 0; i < Math.min(80, lines.length); i++) {
+                    const raw = lines[i].trim().replace(/[,，]/g, '');
+                    const num = parseInt(raw);
+                    if (/^\\d+$/.test(raw) && num >= RANGE.min && num <= RANGE.max) {
+                        return { price: num, method: 'text', line: lines[i].trim() };
+                    }
+                }
+                return null;
+            }
+        """)
 
-    ticker_m = re.search(rf"({prefix}\d{{4}})", contract_href, re.I)
-    ticker   = ticker_m.group(1).upper() if ticker_m else "UNKNOWN"
-    display  = f"{target['exchange']}·{ticker}"
-    full_url = (f"https://www-old.metal.com{contract_href}"
-                if contract_href.startswith('/') else contract_href)
+        price = result["price"] if result else None
+        method = result.get("method", "none") if result else "none"
+        print(f"  Eastmoney {display}: price={price} ({method})")
 
-    print(f"  발견: {display}")
-
-    try:
-        await page.goto(full_url, wait_until="commit", timeout=15000)
-        await page.wait_for_timeout(2000)
+        # 등락률 추출
         text = await page.inner_text("body")
+        pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
+        change_pct = pct_m.group(1) if pct_m else "N/A"
 
-        latest_m   = re.search(r"Latest:\s*([\d,]+)", text)
-        all_pcts_f = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
-        change_pct = next((p for p in all_pcts_f if p != "0%"), "N/A")
-        prev_m     = re.search(r"Prev\.Close\s*([\d,]+)", text)
-        date_m     = re.search(
-            r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
-
-        latest_raw      = int(latest_m.group(1).replace(",", "")) if latest_m else None
-        latest_vat_excl = round(latest_raw / VAT_RATE) if latest_raw else None
+        latest_vat_excl = round(price / VAT_RATE) if price else None
 
         return {
             **base,
-            "ticker":          display,
-            "date":            date_m.group(1) if date_m else "N/A",
-            "latest":          latest_raw,
+            "date":            datetime.now().strftime("%b %d, %Y"),
+            "latest":          price,
             "latest_vat_excl": latest_vat_excl,
             "change_pct":      change_pct,
-            "prev_close":      int(prev_m.group(1).replace(",", "")) if prev_m else None,
-            "status":          "OK",
+            "prev_close":      None,
+            "status":          "OK" if price else "ERROR: 가격 파싱 실패",
         }
     except Exception as e:
-        return {**base, "ticker": display, "status": f"ERROR: 가격 파싱 실패 {e}"}
+        return {**base, "status": f"ERROR: {e}"}
 
 
 async def scrape_smm_prices() -> dict:
@@ -493,9 +463,9 @@ async def scrape_smm_prices() -> dict:
             print("OK" if r["status"] == "OK" else f"W {r['status']}")
             await asyncio.sleep(2)
 
-        for t in FUTURES_LIST_PAGES:
+        for t in FUTURES_EM:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
-            r = await _scrape_futures_dynamic(page, t)
+            r = await _scrape_em_futures(page, t)
             futures_results.append(r)
             print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
             await asyncio.sleep(2)
@@ -968,10 +938,20 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
 
         label = _spot_label(r['name'])
 
+        # 황산코발트: "참고" 소형 배지 추가 (가격 신뢰도 낮음 고지)
+        ref_badge = ""
+        if r["name"] == "황산코발트":
+            ref_badge = (
+                '<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
+                'font-size:9px;font-weight:400;padding:1px 5px;border-radius:3px;'
+                'margin-left:5px;vertical-align:middle;letter-spacing:0;">'
+                '참고</span>'
+            )
+
         spot_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}</b>
+            <b style="font-size:13px;color:#0f2744;margin-bottom:3px;">{label}{ref_badge}</b><br>
             <span style="font-size:11px;color:#8f9ba8;">{r['name_en']}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
@@ -1035,9 +1015,12 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
   </tr>
   <tr>
     <td bgcolor="#ffffff" style="background:#ffffff;padding:20px 6px 16px;">
-      <p style="margin:0 0 14px;font-size:12px;color:#64748b;padding:0 8px;
+      <p style="margin:0 0 6px;font-size:12px;color:#64748b;padding:0 8px;
                 font-family:'Malgun Gothic',Arial,sans-serif;text-align:left;">
-        {today} · 증치세 제외 기준&nbsp;&nbsp;{spread_badges}
+        {today} · 증치세 제외 기준
+      </p>
+      <p style="margin:0 0 14px;padding:0 8px;text-align:left;line-height:1.6;">
+        {spread_badges}
       </p>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              bgcolor="#ffffff"
