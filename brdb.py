@@ -646,8 +646,9 @@ def collect_rss():
                     continue
                 if is_stock_noise(title):
                     continue
-                if not any(w in lt for w in WHITELIST):
-                    continue
+                if source != "SMM Metal":
+                    if not any(w in lt for w in WHITELIST):
+                        continue
 
                 seen.add(link)
                 raw.append({
@@ -706,19 +707,23 @@ def fetch_body(real_url):
         print(f"Jina 오류: {e}")
     return ""
 
-async def get_real_url(page, cbm_url):
+def get_real_url(cbm_url: str) -> str | None:
+    """
+    Google News CBMi redirect URL → 실제 기사 URL.
+    requests로 redirect 두 번 (?oc=5 → &hl=en-US... → 실제 URL) 안전하게 처리.
+    """
     try:
-        await page.goto(cbm_url, wait_until="commit", timeout=15000)
-        try:
-            await page.wait_for_url(
-                lambda url: "news.google.com" not in url, timeout=10000)
-        except:
-            pass
-        final_url = page.url
-        if "news.google.com" not in final_url:
-            return final_url
+        resp = requests.get(
+            cbm_url,
+            timeout=(5, 15),
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        final = resp.url
+        if "news.google.com" not in final:
+            return final
     except Exception as e:
-        print(f"리다이렉트 실패: {e}")
+        print(f"URL 리졸브 실패: {e}")
     return None
 
 # ============================================================
@@ -763,50 +768,39 @@ async def enrich_articles(articles):
 
     print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+시황{len(priority)}+일반{len(general)}={len(targets)}건")
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
-        page = await browser.new_page()
-        await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        })
+    body_success = 0
+    body_snippet = 0
 
-        body_success = 0
-        body_snippet = 0
+    for i, article in enumerate(targets):
+        print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
+        link = article["link"]
 
-        for i, article in enumerate(targets):
-            print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
-            link = article["link"]
-
-            if "SMM" in article.get("source", "") or "news.google.com" not in link:
-                body = fetch_body(link)
-                if body:
-                    article["body"] = body
-                    body_success += 1
-                    print(f"  OK Jina ({len(body)}자)")
-                else:
-                    body_snippet += 1
-                    print("  W 스니펫 사용")
-                continue
-
-            real_url = await get_real_url(page, link)
-            if real_url:
-                article["real_url"] = real_url
-                body = fetch_body(real_url)
+        if "SMM" in article.get("source", "") or "news.google.com" not in link:
+            body = fetch_body(link)
+            if body:
                 article["body"] = body
-                if body:
-                    body_success += 1
-                    print(f"  OK {real_url[:65]} ({len(body)}자)")
-                else:
-                    body_snippet += 1
-                    print("  W 본문없음 스니펫")
+                body_success += 1
+                print(f"  OK Jina ({len(body)}자)")
             else:
                 body_snippet += 1
-                print("  W 리다이렉트 실패 스니펫")
+                print("  W 스니펫 사용")
+            continue
 
-        await browser.close()
+        # Google News CBMi redirect → requests로 실제 URL 추출 (Playwright 불필요)
+        real_url = get_real_url(link)
+        if real_url:
+            article["real_url"] = real_url
+            body = fetch_body(real_url)
+            article["body"] = body
+            if body:
+                body_success += 1
+                print(f"  OK {real_url[:65]} ({len(body)}자)")
+            else:
+                body_snippet += 1
+                print("  W 본문없음 스니펫")
+        else:
+            body_snippet += 1
+            print("  W 리다이렉트 실패 스니펫")
 
     print(f"\n본문결과: 성공{body_success}건 / 스니펫{body_snippet}건")
     return targets
