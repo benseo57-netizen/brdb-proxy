@@ -440,23 +440,44 @@ async def _scrape_em_futures(page, target: dict) -> dict:
         await page.wait_for_timeout(5000)
         result = await page.evaluate("""
             () => {
+                const text = document.body ? (document.body.innerText || '') : '';
                 const RANGE = { min: 30000, max: 600000 };
-                const selectors = ['.zxj','.cur_price','.price','.now',
-                    '[class*="price"]','[class*="zxj"]','em.red','em.green'];
-                for (const sel of selectors) {
-                    try {
-                        for (const el of document.querySelectorAll(sel)) {
-                            const n = parseInt((el.textContent||'').replace(/[,，\\s]/g,''));
-                            if (n >= RANGE.min && n <= RANGE.max) return n;
-                        }
-                    } catch(e){}
+
+                // ── 1순위: 우측 패널 레이블 기반 파싱 ──────────────────
+                // Eastmoney 期货 페이지 우측 패널에 "最新: 191760" 형태로 표시됨
+                const labelPatterns = [
+                    /最新[^\d]*(\d{4,7})/,      // 최신가
+                    /卖出价[^\d]*(\d{4,7})/,    // 호가(매도) ≒ 최신가
+                    /买入[^\d]*(\d{4,7})/,       // 호가(매수)
+                ];
+                for (const pat of labelPatterns) {
+                    const m = text.match(pat);
+                    if (m) {
+                        const n = parseInt(m[1]);
+                        if (n >= RANGE.min && n <= RANGE.max) return n;
+                    }
                 }
-                const lines = (document.body.innerText||'').split(/[\\n\\r]+/);
-                for (let i=0; i<Math.min(80,lines.length); i++) {
-                    const n = parseInt(lines[i].trim().replace(/[,，]/g,''));
-                    if (/^\\d+$/.test(lines[i].trim().replace(/[,，]/g,'')) &&
-                        n >= RANGE.min && n <= RANGE.max) return n;
+
+                // ── 2순위: 昨结算 + 涨跌 계산 ────────────────────────
+                // "昨结算: 201840" 과 "涨跌 -10080" 에서 현재가 역산
+                const prevM = text.match(/昨结算[^\d]*(\d{4,7})/);
+                const chgM  = text.match(/涨跌[^\d]*([-+]?\d{1,6})/);
+                if (prevM && chgM) {
+                    const prev = parseInt(prevM[1]);
+                    const chg  = parseInt(chgM[1]);
+                    const calc = prev + chg;
+                    if (calc >= RANGE.min && calc <= RANGE.max) return calc;
                 }
+
+                // ── 3순위: 昨收 + 涨跌 ───────────────────────────────
+                const prevCloseM = text.match(/昨收[^\d]*(\d{4,7})/);
+                if (prevCloseM && chgM) {
+                    const prev = parseInt(prevCloseM[1]);
+                    const chg  = parseInt(chgM[1]);
+                    const calc = prev + chg;
+                    if (calc >= RANGE.min && calc <= RANGE.max) return calc;
+                }
+
                 return null;
             }
         """)
@@ -1367,3 +1388,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
