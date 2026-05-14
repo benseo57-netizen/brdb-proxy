@@ -32,9 +32,6 @@ SPOT_TARGETS = [
     {"name": "황산코발트",       "name_en": "Cobalt Sulphate",
      "url": "https://www-old.metal.com/Chemical-Compound/201102250381",
      "metal_content": 0.205, "metal_label": "Co"},
-    {"name": "배터리용 황산니켈", "name_en": "Batt. Nickel Sulphate",
-     "url": "https://www-old.metal.com/Nickel/201908270001",
-     "metal_content": 0.22, "metal_label": "Ni"},
     {"name": "공업용 탄산리튬",   "name_en": "Industrial Li2CO3",
      "url": "https://www-old.metal.com/lithium/201905160001"},
     {"name": "배터리용 탄산리튬", "name_en": "Battery Li2CO3",
@@ -53,11 +50,11 @@ FUTURES_EM = [
     },
     {
         "name":      "니켈 선물",
-        "exchange":  "SHFE",
+        "exchange":  "LME",
         "url":       None,
-        "ticker":    "NIM",
-        "method":    "api",                           # SHFE 공식 결산가 API
-        "sina_code": "nf_NIM",
+        "ticker":    "LME·3M",
+        "method":    "lme",                           # westmetall.com (requests)
+        "sina_code": None,
     },
 ]
 
@@ -317,6 +314,54 @@ def get_usd_cny_rate() -> float:
         return 7.25
 
 
+def _fetch_lme_nickel() -> dict:
+    """westmetall.com에서 LME 니켈 현물(Cash) · 선물(3-month) 수집.
+    정적 HTML 테이블 → requests만으로 파싱, Playwright 불필요.
+    1일 지연 (전일 LME 공식 결산가 기준).
+    Returns: {cash, cash_pct, m3, m3_pct, date}
+    """
+    try:
+        resp = requests.get(
+            "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        if resp.status_code != 200:
+            print(f"  LME 니켈 HTTP {resp.status_code}")
+            return {}
+
+        # "| 13. May 2026 | 19,020.00 | 19,240.00 | 275,778 |" 형태 파싱
+        rows = re.findall(
+            r'\|\s*(\d+\.\s+\w+\s+\d{4})\s*\|\s*([\d,]+\.\d+)\s*\|\s*([\d,]+\.\d+)',
+            resp.text
+        )
+        if len(rows) < 2:
+            print(f"  LME 니켈 행 파싱 실패 (rows={len(rows)})")
+            return {}
+
+        def p(s): return float(s.replace(",", ""))
+
+        cash    = p(rows[0][1])
+        m3      = p(rows[0][2])
+        prev_c  = p(rows[1][1])
+        prev_3m = p(rows[1][2])
+
+        cash_pct = f"{(cash - prev_c)  / prev_c  * 100:+.2f}%"
+        m3_pct   = f"{(m3   - prev_3m) / prev_3m * 100:+.2f}%"
+
+        print(f"  LME 니켈: Cash=${cash:,.0f}({cash_pct}), 3M=${m3:,.0f}({m3_pct}) [{rows[0][0].strip()}]")
+        return {
+            "cash":     cash,
+            "cash_pct": cash_pct,
+            "m3":       m3,
+            "m3_pct":   m3_pct,
+            "date":     rows[0][0].strip(),
+        }
+    except Exception as e:
+        print(f"  LME 니켈 오류: {e}")
+        return {}
+
+
 async def _scrape_spot(page, target: dict) -> dict:
     base = {"name": target["name"], "name_en": target["name_en"]}
     try:
@@ -359,6 +404,56 @@ async def _scrape_spot(page, target: dict) -> dict:
         }
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
+
+
+def _fetch_lme_nickel() -> dict:
+    """westmetall.com에서 LME 니켈 현물(Cash) + 3개월물 수집.
+    순수 정적 HTML 테이블 → requests만 사용, Playwright 불필요.
+    전일 공식 결산가 기준 (T-1 / 1일 지연).
+
+    Returns:
+        {"cash": float, "m3": float, "date": str, "cash_pct": str, "m3_pct": str}
+        실패 시 빈 dict {}
+    """
+    url = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
+    try:
+        resp = requests.get(url, timeout=10, headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://www.westmetall.com/en/markdaten.php",
+        })
+        resp.raise_for_status()
+
+        # 테이블 행 파싱: "| 13. May 2026 | 19,020.00 | 19,240.00 | 275,778 |"
+        rows = re.findall(
+            r'\|\s*(\d+\.\s+\w+\s+\d{4})\s*\|\s*([\d,]+\.?\d*)\s*\|\s*([\d,]+\.?\d*)',
+            resp.text
+        )
+        if len(rows) < 2:
+            print(f"  LME Ni: 파싱 실패 (rows={len(rows)})")
+            return {}
+
+        today, prev = rows[0], rows[1]
+        cash   = float(today[1].replace(',', ''))
+        m3     = float(today[2].replace(',', ''))
+        cash_p = float(prev[1].replace(',', ''))
+        m3_p   = float(prev[2].replace(',', ''))
+
+        cash_pct = f"{(cash - cash_p) / cash_p * 100:+.2f}%"
+        m3_pct   = f"{(m3 - m3_p)   / m3_p   * 100:+.2f}%"
+
+        print(f"  LME Ni Cash: ${cash:,.0f} ({cash_pct})  |  3M: ${m3:,.0f} ({m3_pct})")
+        return {
+            "cash": cash, "m3": m3,
+            "date": today[0].strip(),
+            "cash_pct": cash_pct, "m3_pct": m3_pct,
+        }
+    except Exception as e:
+        print(f"  LME Ni 오류: {e}")
+        return {}
 
 
 def _fetch_sina_price(sina_code: str) -> tuple:
@@ -582,9 +677,33 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
-async def scrape_smm_prices() -> dict:
+async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     spot_results, futures_results = [], []
     print("\n[SMM 시세 수집]")
+
+    # ── LME 니켈: 먼저 requests로 수집 (Playwright 불필요) ─────────
+    lme_ni = _fetch_lme_nickel()
+    if lme_ni:
+        spot_results.append({
+            "name":          "니켈",
+            "name_en":       "LME Nickel",
+            "source":        "LME",
+            "date":          lme_ni["date"],
+            "usd_excl":      lme_ni["cash"],
+            "cny_incl":      None,
+            "cny_excl":      round(lme_ni["cash"] * usd_cny),
+            "usd_metal":     None,   # 이미 금속가, 별도 환산 불필요
+            "cny_metal":     None,
+            "metal_content": None,
+            "metal_label":   None,
+            "change_pct":    lme_ni["cash_pct"],
+            "delayed":       True,   # T-1 표시
+            "status":        "OK",
+        })
+    else:
+        spot_results.append({"name": "니켈", "name_en": "LME Nickel",
+                              "source": "LME", "status": "ERROR: 수집 실패"})
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -610,6 +729,28 @@ async def scrape_smm_prices() -> dict:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
+            elif t.get("method") == "lme":
+                # LME 3개월물 — 앞서 수집한 lme_ni 재사용
+                if lme_ni:
+                    r = {
+                        "name":            t["name"],
+                        "exchange":        "LME",
+                        "ticker":          "LME·3M",
+                        "source":          "LME",
+                        "date":            lme_ni["date"],
+                        "latest":          round(lme_ni["m3"]),
+                        "latest_vat_excl": round(lme_ni["m3"] * usd_cny),
+                        "change_pct":      lme_ni["m3_pct"],
+                        "delayed":         True,
+                        "status":          "OK",
+                    }
+                    print(f"OK (LME·3M ${lme_ni['m3']:,.0f})")
+                else:
+                    r = {"name": t["name"], "exchange": "LME",
+                         "ticker": "LME·3M", "status": "ERROR: LME 데이터 없음"}
+                    print("W LME 데이터 없음")
+                futures_results.append(r)
+                continue
             else:
                 r = _scrape_nim_api(t)
             futures_results.append(r)
@@ -637,16 +778,18 @@ def compute_spreads(price_data: dict) -> dict:
             "structure": "백워데이션" if diff > 0 else "콘탱고",
         }
 
-    ni_data = futures_map.get("SHFE", {})
-    ni_s    = spot_map.get("배터리용 황산니켈", {}).get("cny_metal")
-    ni_f    = ni_data.get("latest_vat_excl")
-    ni_tick = ni_data.get("ticker", "SHFE·NI????").split("·")[-1]
+    # LME 니켈: Cash(현물) vs 3M(선물) — 모두 USD 기준
+    ni_data   = futures_map.get("LME", {})
+    ni_spot_r = spot_map.get("니켈", {})
+    ni_s      = ni_spot_r.get("usd_excl")   # LME Cash (USD/t)
+    ni_f      = ni_data.get("latest")        # LME 3M (USD/t)
     if ni_s and ni_f:
         diff = ni_s - ni_f
         spreads["니켈"] = {
-            "spot_metal": ni_s, "futures": ni_f, "ticker": ni_tick,
+            "spot_metal": ni_s, "futures": ni_f, "ticker": "3M",
             "spread": diff, "spread_pct": diff / ni_f * 100,
             "structure": "백워데이션" if diff > 0 else "콘탱고",
+            "unit": "USD",
         }
 
     return spreads
@@ -688,8 +831,8 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
     if "니켈" in spreads:
         s = spreads["니켈"]
         lines.append(
-            f"  니켈Ni환산({s['ticker']}): CNY{s['spot_metal']:,.0f} vs 선물CNY{s['futures']:,.0f}"
-            f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%)"
+            f"  니켈LME({s['ticker']}): Cash${s['spot_metal']:,.0f} vs 3M${s['futures']:,.0f}"
+            f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%) [T-1]"
         )
 
     return "\n".join(lines)
@@ -1086,15 +1229,26 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
 
         label = _spot_label(r['name'])
 
-        # 황산코발트: "참고" 소형 배지 추가 (가격 신뢰도 낮음 고지)
+        # 황산코발트: "참고" 소형 배지
         ref_badge = ""
         if r["name"] == "황산코발트":
             ref_badge = (
                 '<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
                 'font-size:9px;font-weight:400;padding:1px 5px;border-radius:3px;'
-                'margin-left:5px;vertical-align:middle;letter-spacing:0;">'
+                'margin-left:5px;vertical-align:middle;">'
                 '참고</span>'
             )
+        # LME 니켈: "T-1" 소형 배지 (전일 결산가)
+        elif r.get("source") == "LME":
+            ref_badge = (
+                '<span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
+                'font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;'
+                'margin-left:5px;vertical-align:middle;">'
+                'T-1</span>'
+            )
+
+        # LME 니켈 CNY: exchange rate 환산 (VAT 없음)
+        cny_display = _fmt(r.get('cny_excl'), 'CNY')
 
         spot_rows += f"""
         <tr>
@@ -1104,7 +1258,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
             {_fmt(r.get('usd_excl'), '$') if ok else '—'}<br>
-            <span style="color:#aaaaaa;font-size:11px;">{_fmt(r.get('cny_excl'), 'CNY')}</span>
+            <span style="color:#aaaaaa;font-size:11px;">{cny_display if ok else '—'}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;font-weight:700;color:#0f2744;font-family:'Malgun Gothic',Arial,sans-serif;">
             {metal_cell}
@@ -1119,22 +1273,45 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         ok       = r["status"] == "OK"
         pct      = r.get("change_pct", "N/A")
         ve       = r.get("latest_vat_excl")
-        usd_excl = round(ve / usd_cny) if ve else None
+        is_lme   = r.get("source") == "LME"
+        # LME: latest는 USD/t, latest_vat_excl은 CNY 환산
+        # GFEX: latest는 CNY(VAT포함), latest_vat_excl은 CNY(VAT제외)
+        usd_excl = round(r["latest"]) if (ok and is_lme) else (round(ve / usd_cny) if ve else None)
+        cny_excl = ve if ok else None
         label    = _fut_label(r['name'])
+
+        # LME T-1 배지
+        fut_badge = ""
+        if is_lme:
+            fut_badge = (
+                ' <span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
+                'font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;">T-1</span>'
+            )
+
+        # 두 번째 컬럼: LME = "USD 결산가", 나머지 = "고시가(VAT포함)"
+        if is_lme and ok:
+            col2 = (
+                f'<span style="font-size:11px;color:#aaaaaa;">USD 결산가</span><br>'
+                f'<b style="color:#555555;">${r["latest"]:,.0f}</b>'
+            )
+        else:
+            col2 = (
+                f'<span style="font-size:11px;color:#aaaaaa;">고시가(VAT포함)</span><br>'
+                f'<b style="color:#555555;">{_fmt(r.get("latest"), "CNY") if ok else "—"}</b>'
+            )
 
         fut_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}</b>
+            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}{fut_badge}</b>
             <span style="font-size:11px;color:#8f9ba8;">{r.get('ticker', '?')}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
             {_fmt(usd_excl, '$') if ok else '—'}<br>
-            <span style="color:#aaaaaa;font-size:11px;">{_fmt(ve, 'CNY') if ok else '—'}</span>
+            <span style="color:#aaaaaa;font-size:11px;">{_fmt(cny_excl, 'CNY') if ok else '—'}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;color:#777777;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <span style="font-size:11px;color:#aaaaaa;">고시가(VAT포함)</span><br>
-            <b style="color:#555555;">{_fmt(r.get('latest'), 'CNY') if ok else '—'}</b>
+            {col2}
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">
             {pct}
@@ -1179,7 +1356,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
             <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
               금속화합물 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(CNY 증치세제외)</span></td>
             <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              금속환산 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(Co20.5%/Ni22%)</span></td>
+              금속환산 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(Co20.5% · Ni: LME 직접)</span></td>
             <td style="padding:12px 14px;text-align:center;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
           </tr>
         </thead>
@@ -1197,7 +1374,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
       </table>
       <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        출처: 현물 SMM (Shanghai Metals Market) · 선물 Eastmoney · 증치세 제외 = 포함가 ÷ 1.13
+        출처: Co·Li 현물 SMM (Shanghai Metals Market) · Ni 현물/선물 LME via Westmetall (T-1 전일 결산가) · LC 선물 GFEX · 증치세 제외 = 포함가 ÷ 1.13
       </p>
     </td>
   </tr>"""
@@ -1450,7 +1627,7 @@ async def main():
     usd_cny    = get_usd_cny_rate()
     price_data = None
     try:
-        price_data = await scrape_smm_prices()
+        price_data = await scrape_smm_prices(usd_cny)
     except Exception as e:
         print(f"W SMM 수집 실패({e}) - 시세없이 계속")
 
