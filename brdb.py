@@ -44,16 +44,18 @@ SPOT_TARGETS = [
 # 선물: Eastmoney 주연(主連) 페이지 — M계약 탐색 불필요, 항상 최근월 자동 롤링
 FUTURES_EM = [
     {
-        "name":     "탄산리튬 선물",
-        "exchange": "GFEX",
-        "url":      "https://quote.eastmoney.com/qihuo/lcm.html",
-        "ticker":   "LCM",
+        "name":      "탄산리튬 선물",
+        "exchange":  "GFEX",
+        "url":       "https://quote.eastmoney.com/qihuo/lcm.html",
+        "ticker":    "LCM",
+        "sina_code": "nf_LCM",   # Sina Finance hq API 코드
     },
     {
-        "name":     "니켈 선물",
-        "exchange": "SHFE",
-        "url":      "https://quote.eastmoney.com/qihuo/nim.html",
-        "ticker":   "NIM",
+        "name":      "니켈 선물",
+        "exchange":  "SHFE",
+        "url":       "https://quote.eastmoney.com/qihuo/nim.html",
+        "ticker":    "NIM",
+        "sina_code": "nf_NIM",   # Sina Finance hq API 코드
     },
 ]
 
@@ -354,89 +356,134 @@ async def _scrape_spot(page, target: dict) -> dict:
         return {**base, "status": f"ERROR: {e}"}
 
 
+def _fetch_sina_price(sina_code: str) -> tuple:
+    """Sina Finance hq API로 선물 주연 최신가 수집.
+    Playwright 불필요, requests로 즉시 반환.
+    Returns: (price_vat_incl: int | None, change_pct: str)
+    """
+    try:
+        resp = requests.get(
+            f"https://hq.sinajs.cn/list={sina_code.lower()}",
+            timeout=8,
+            headers={
+                "Referer": "https://finance.sina.com.cn/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+        )
+        if resp.status_code != 200:
+            print(f"  Sina [{sina_code}] HTTP {resp.status_code}")
+            return None, "N/A"
+
+        m = re.search(r'"([^"]*)"', resp.text)
+        if not m or len(m.group(1)) < 5:
+            print(f"  Sina [{sina_code}] 빈 응답: {resp.text[:80]}")
+            return None, "N/A"
+
+        parts = [p.strip() for p in m.group(1).split(',')]
+        print(f"  Sina [{sina_code}]: {parts[:9]}")
+
+        # 최신가: parts[1:8] 중 30000~600000 범위 첫 번째 숫자
+        price = None
+        for p in parts[1:8]:
+            try:
+                v = float(p)
+                if 30000 <= v <= 600000:
+                    price = int(v)
+                    break
+            except Exception:
+                continue
+
+        # 등락률: 昨결산(parts[7]) 기준 직접 계산
+        change_pct = "N/A"
+        if price and len(parts) > 7:
+            try:
+                prev = float(parts[7])
+                if 30000 <= prev <= 600000:
+                    change_pct = f"{(price - prev) / prev * 100:+.2f}%"
+            except Exception:
+                pass
+
+        return price, change_pct
+
+    except Exception as e:
+        print(f"  Sina 오류 [{sina_code}]: {e}")
+        return None, "N/A"
+
+
 async def _scrape_em_futures(page, target: dict) -> dict:
-    """Eastmoney 주연(主連) 페이지에서 선물 최근월 가격 수집.
-    주연 = 자동 롤링 주계약이므로 M마커 탐색 불필요.
-    가격은 VAT 포함 기준 (÷1.13 = VAT 제외).
+    """선물 주연 가격 수집.
+    1차: Sina Finance REST API (빠름, Playwright 불필요)
+    2차: Eastmoney Playwright — 25초 hard timeout (hang 방지)
     """
     display = f"{target['exchange']}·{target['ticker']}"
     base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
-    try:
-        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
-
-        # JS 데이터 로드 대기 — 가격 element가 숫자로 바뀔 때까지 최대 12초
-        try:
-            await page.wait_for_function(
-                """() => {
-                    const body = document.body ? (document.body.innerText || '') : '';
-                    // 5만 이상 숫자가 페이지에 나타나면 로드 완료로 판단
-                    return /[1-9]\\d{4,6}/.test(body.replace(/[,，]/g, ''));
-                }""",
-                timeout=12000
-            )
-        except Exception:
-            await page.wait_for_timeout(5000)  # fallback: 5초 대기
-
-        # JS evaluate로 가격 탐색 — 여러 selector 시도 후 body text fallback
-        result = await page.evaluate("""
-            () => {
-                // Eastmoney qihuo 페이지의 일반적인 가격 selector 목록
-                const selectors = [
-                    '.zxj', '.cur_price', '.price', '.now',
-                    '[class*="price"]', '[class*="zxj"]', '[class*="cur"]',
-                    'em.red', 'em.green', 'b.red', 'b.green',
-                ];
-                const RANGE = { min: 30000, max: 600000 };
-
-                for (const sel of selectors) {
-                    try {
-                        const els = document.querySelectorAll(sel);
-                        for (const el of els) {
-                            const raw = (el.textContent || '').trim().replace(/[,，\\s]/g, '');
-                            const num = parseInt(raw);
-                            if (!isNaN(num) && num >= RANGE.min && num <= RANGE.max) {
-                                return { price: num, method: 'selector', sel };
-                            }
-                        }
-                    } catch(e) {}
-                }
-
-                // Fallback: body text 에서 처음 나오는 해당 범위 숫자 추출
-                const lines = (document.body.innerText || '').split(/[\\n\\r]+/);
-                for (let i = 0; i < Math.min(80, lines.length); i++) {
-                    const raw = lines[i].trim().replace(/[,，]/g, '');
-                    const num = parseInt(raw);
-                    if (/^\\d+$/.test(raw) && num >= RANGE.min && num <= RANGE.max) {
-                        return { price: num, method: 'text', line: lines[i].trim() };
-                    }
-                }
-                return null;
-            }
-        """)
-
-        price = result["price"] if result else None
-        method = result.get("method", "none") if result else "none"
-        print(f"  Eastmoney {display}: price={price} ({method})")
-
-        # 등락률 추출
-        text = await page.inner_text("body")
-        pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
-        change_pct = pct_m.group(1) if pct_m else "N/A"
-
-        latest_vat_excl = round(price / VAT_RATE) if price else None
-
+    # ── 1차: Sina Finance API ──────────────────────────────────────
+    price, change_pct = _fetch_sina_price(target["sina_code"])
+    if price:
+        print(f"  Sina OK {display}: {price:,} (VAT포함)")
         return {
             **base,
             "date":            datetime.now().strftime("%b %d, %Y"),
             "latest":          price,
-            "latest_vat_excl": latest_vat_excl,
+            "latest_vat_excl": round(price / VAT_RATE),
             "change_pct":      change_pct,
             "prev_close":      None,
-            "status":          "OK" if price else "ERROR: 가격 파싱 실패",
+            "status":          "OK",
         }
+
+    # ── 2차: Eastmoney Playwright (25초 hard limit) ─────────────────
+    print(f"  Sina 실패 → Playwright fallback {display}")
+
+    async def _pw_scrape():
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(5000)
+        result = await page.evaluate("""
+            () => {
+                const RANGE = { min: 30000, max: 600000 };
+                const selectors = ['.zxj','.cur_price','.price','.now',
+                    '[class*="price"]','[class*="zxj"]','em.red','em.green'];
+                for (const sel of selectors) {
+                    try {
+                        for (const el of document.querySelectorAll(sel)) {
+                            const n = parseInt((el.textContent||'').replace(/[,，\\s]/g,''));
+                            if (n >= RANGE.min && n <= RANGE.max) return n;
+                        }
+                    } catch(e){}
+                }
+                const lines = (document.body.innerText||'').split(/[\\n\\r]+/);
+                for (let i=0; i<Math.min(80,lines.length); i++) {
+                    const n = parseInt(lines[i].trim().replace(/[,，]/g,''));
+                    if (/^\\d+$/.test(lines[i].trim().replace(/[,，]/g,'')) &&
+                        n >= RANGE.min && n <= RANGE.max) return n;
+                }
+                return null;
+            }
+        """)
+        return result
+
+    try:
+        price = await asyncio.wait_for(_pw_scrape(), timeout=25)
+        print(f"  Playwright {display}: price={price}")
+        if price:
+            text = await page.inner_text("body")
+            pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
+            change_pct = pct_m.group(1) if pct_m else "N/A"
+            return {
+                **base,
+                "date":            datetime.now().strftime("%b %d, %Y"),
+                "latest":          price,
+                "latest_vat_excl": round(price / VAT_RATE),
+                "change_pct":      change_pct,
+                "prev_close":      None,
+                "status":          "OK",
+            }
+    except asyncio.TimeoutError:
+        print(f"  Playwright timeout {display}")
     except Exception as e:
-        return {**base, "status": f"ERROR: {e}"}
+        print(f"  Playwright 오류 {display}: {e}")
+
+    return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
 async def scrape_smm_prices() -> dict:
