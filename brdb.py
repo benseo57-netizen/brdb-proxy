@@ -32,12 +32,12 @@ SPOT_TARGETS = [
     {"name": "황산코발트",       "name_en": "Cobalt Sulphate",
      "url": "https://www-old.metal.com/Chemical-Compound/201102250381",
      "metal_content": 0.205, "metal_label": "Co"},
-    {"name": "배터리용 황산니켈", "name_en": "Battery-Grade Nickel Sulphate",
+    {"name": "배터리용 황산니켈", "name_en": "Batt. Nickel Sulphate",
      "url": "https://www-old.metal.com/Nickel/201908270001",
      "metal_content": 0.22, "metal_label": "Ni"},
-    {"name": "공업용 탄산리튬",   "name_en": "Industrial-Grade Li2CO3",
+    {"name": "공업용 탄산리튬",   "name_en": "Industrial Li2CO3",
      "url": "https://www-old.metal.com/lithium/201905160001"},
-    {"name": "배터리용 탄산리튬", "name_en": "Battery-Grade Li2CO3",
+    {"name": "배터리용 탄산리튬", "name_en": "Battery Li2CO3",
      "url": "https://www-old.metal.com/Lithium/201102250059"},
 ]
 
@@ -357,10 +357,7 @@ async def _scrape_spot(page, target: dict) -> dict:
 
 
 async def _scrape_futures_dynamic(page, target: dict) -> dict:
-    """
-    선물 리스트 페이지에서 M(Main) 계약 자동 탐색 후 가격 수집.
-    계약 만기로 URL이 바뀌어도 자동 대응.
-    """
+    """선물 리스트 페이지에서 M(Main) 계약 자동 탐색 후 가격 수집."""
     base = {"name": target["name"], "exchange": target["exchange"]}
 
     try:
@@ -381,7 +378,6 @@ async def _scrape_futures_dynamic(page, target: dict) -> dict:
         () => {{
             const prefix = '{prefix}';
             const links = Array.from(document.querySelectorAll('a[href]'));
-
             for (const link of links) {{
                 const href = link.getAttribute('href') || '';
                 if (!new RegExp(prefix + '\\\\d{{4}}', 'i').test(href)) continue;
@@ -399,7 +395,6 @@ async def _scrape_futures_dynamic(page, target: dict) -> dict:
                 );
                 if (hasM) return href;
             }}
-
             for (const link of links) {{
                 const href = link.getAttribute('href') || '';
                 if (!new RegExp(prefix + '\\\\d{{4}}', 'i').test(href)) continue;
@@ -838,7 +833,6 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
         spreads     = compute_spreads(price_data)
         price_str   = format_price_for_prompt(price_data, usd_cny, spreads)
         price_sec   = f"\n[당일 SMM 시세]\n{price_str}\n"
-        # ★ 시사점 다양성 강제: 시세 1개 + 기사 기반 2~3개 + 해외법인 1개 + 모멘텀 1개
         price_guide = """
 [시사점 5개 작성 — 아래 구성 반드시 준수]
 ① 시세 종합 (1개만, 필수): 탄산리튬·니켈·코발트 스프레드를 하나로 묶어 원료 매입/제품 판매 전략 시사점. 구체적 수치 인용.
@@ -909,10 +903,19 @@ def _pct_color(pct: str) -> str:
         return "#888888"
     return "#c0392b" if "+" in pct else "#2471a3"
 
+def _spot_label(name: str) -> str:
+    """표시용 품목명: 배터리용→BG, 공업용→TG (내부 데이터명은 그대로 유지)"""
+    return name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
+
+def _fut_label(name: str) -> str:
+    """선물 표시명: ' 선물' 제거 (선물 섹션임을 구분선이 이미 표기)"""
+    return name.replace(" 선물", "")
+
 def build_price_section(price_data: dict, usd_cny: float) -> str:
     today   = datetime.now().strftime("%Y.%m.%d")
     spreads = compute_spreads(price_data)
 
+    # ── 현물 행 ──────────────────────────────────────────────
     spot_rows = ""
     for r in price_data["spot"]:
         ok  = r["status"] == "OK"
@@ -927,10 +930,12 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         else:
             metal_cell = "—"
 
+        label = _spot_label(r['name'])
+
         spot_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{r['name']}</b>
+            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}</b>
             <span style="font-size:11px;color:#8f9ba8;">{r['name_en']}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
@@ -945,17 +950,19 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
+    # ── 선물 행 ──────────────────────────────────────────────
     fut_rows = ""
     for r in price_data["futures"]:
         ok       = r["status"] == "OK"
         pct      = r.get("change_pct", "N/A")
         ve       = r.get("latest_vat_excl")
         usd_excl = round(ve / usd_cny) if ve else None
+        label    = _fut_label(r['name'])
 
         fut_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{r['name']}</b>
+            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}</b>
             <span style="font-size:11px;color:#8f9ba8;">{r.get('ticker', '?')}</span>
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
@@ -971,19 +978,20 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
-    # ★ 배지 간격: &nbsp;&nbsp; 사용 (Outlook CSS margin 무시 대응)
+    # ── 배지: <br> 로 각자 한 줄씩 ──────────────────────────
     spread_badges = ""
     for k in ["탄산리튬", "니켈"]:
         if k in spreads:
             s      = spreads[k]
             clr    = "#c0392b" if s["spread"] > 0 else "#2563eb"
-            spacer = "&nbsp;&nbsp;" if spread_badges else ""
+            spacer = "<br>" if spread_badges else ""
             spread_badges += (
                 f'{spacer}<span style="display:inline-block;background:{clr};color:#ffffff;'
                 f'font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;">'
                 f'{s["ticker"]} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
             )
 
+    # ★ 좌우 패딩 최소화 → 테이블이 이메일 테두리에 가깝게
     return f"""
   <tr>
     <td bgcolor="#1e293b"
@@ -993,10 +1001,9 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     </td>
   </tr>
   <tr>
-    <td bgcolor="#ffffff" style="background:#ffffff;padding:25px 30px 20px;">
-      <p style="margin:0 0 15px;font-size:12px;color:#64748b;
-                font-family:'Malgun Gothic',Arial,sans-serif;
-                text-align:left;word-break:keep-all;">
+    <td bgcolor="#ffffff" style="background:#ffffff;padding:20px 6px 16px;">
+      <p style="margin:0 0 14px;font-size:12px;color:#64748b;padding:0 8px;
+                font-family:'Malgun Gothic',Arial,sans-serif;text-align:left;">
         {today} · 증치세 제외 기준&nbsp;&nbsp;{spread_badges}
       </p>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
@@ -1006,7 +1013,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           <tr bgcolor="#f8fafc" style="background:#f8fafc;">
             <td style="padding:12px 14px;text-align:left;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">품목</td>
             <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              황산염 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(CNY 증치세제외)</span></td>
+              금속화합물 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(CNY 증치세제외)</span></td>
             <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
               금속환산 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(Co20.5%/Ni22%)</span></td>
             <td style="padding:12px 14px;text-align:center;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
@@ -1017,15 +1024,14 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           <tr>
             <td colspan="4" bgcolor="#f1f5f9"
                 style="padding:8px 14px;background:#f1f5f9;font-size:11px;font-weight:700;
-                       color:#64748b;letter-spacing:0.3px;text-align:center;
-                       font-family:'Malgun Gothic',Arial,sans-serif;">
+                       color:#64748b;text-align:center;font-family:'Malgun Gothic',Arial,sans-serif;">
               선물 (Futures) · 증치세제외 환산 &nbsp;|&nbsp; USD/CNY {usd_cny:.2f}
             </td>
           </tr>
           {fut_rows}
         </tbody>
       </table>
-      <p style="margin:10px 0 0;color:#94a3b8;font-size:11px;text-align:right;
+      <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
         출처: SMM (Shanghai Metals Market) · 증치세 제외 = 포함가 ÷ 1.13
       </p>
@@ -1043,13 +1049,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     for a in data.get("articles", []):
         by_tag.setdefault(a.get("tag", "기타"), []).append(a)
 
-    # ★ 모바일 한국어 텍스트: word-break:keep-all; text-align:left 명시
-    P_STYLE = (
-        "font-size:14px;color:#475569;line-height:1.6;margin:0 0 18px 0;"
-        "font-family:'Malgun Gothic',Arial,sans-serif;"
-        "text-align:left;word-break:keep-all;word-wrap:break-word;"
-    )
-
     def card(a):
         url     = esc(a.get("real_url") or a.get("link", ""))
         summary = esc(a.get("summary", "")).replace('\n', '<br>')
@@ -1059,7 +1058,7 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
                       border-collapse:collapse;background:#ffffff;">
           <tr>
             <td style="padding:22px;">
-              <p style="margin:0 0 10px 0;text-align:left;">
+              <p style="margin:0 0 10px 0;">
                 <span style="display:inline-block;font-size:11px;font-weight:700;padding:4px 10px;
                       background:#dcfce7;color:#15803d;border-radius:4px;
                       font-family:'Malgun Gothic',Arial,sans-serif;">
@@ -1069,11 +1068,12 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
                   {esc(a.get('source', ''))} · {esc(a.get('date', ''))}</span>
               </p>
               <h4 style="font-size:16px;font-weight:700;color:#0f2744;margin:0 0 10px 0;
-                         line-height:1.4;font-family:'Malgun Gothic',Arial,sans-serif;
-                         text-align:left;word-break:keep-all;">
+                         line-height:1.4;font-family:'Malgun Gothic',Arial,sans-serif;">
                 <a href="{url}" style="color:#0f2744;text-decoration:none;">{esc(a.get('title', ''))}</a>
               </h4>
-              <p style="{P_STYLE}">{summary}</p>
+              <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 18px 0;
+                        font-family:'Malgun Gothic',Arial,sans-serif;">
+                {summary}</p>
               <table cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td align="center" bgcolor="#ffffff"
@@ -1096,7 +1096,7 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
         articles_html += (
             f'<h3 style="font-size:15px;font-weight:700;color:#334155;'
             f'border-left:3px solid #2563eb;padding-left:10px;margin:25px 0 12px;'
-            f'font-family:\'Malgun Gothic\',Arial,sans-serif;text-align:left;">{esc(tag)}</h3>'
+            f'font-family:\'Malgun Gothic\',Arial,sans-serif;">{esc(tag)}</h3>'
         )
         for a in by_tag[tag]:
             articles_html += card(a)
@@ -1112,21 +1112,18 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
                 style="background:#2563eb;font-size:1px;line-height:1px;">&nbsp;</td>
             <td style="padding:18px 20px;">
               <p style="font-size:12px;font-weight:800;color:#2563eb;margin:0 0 6px 0;
-                        letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;
-                        text-align:left;">TREND 0{i+1}</p>
+                        letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;">
+                TREND 0{i+1}</p>
               <h4 style="font-size:15px;font-weight:700;color:#0f2744;margin:0 0 8px 0;
-                         font-family:'Malgun Gothic',Arial,sans-serif;text-align:left;
-                         word-break:keep-all;">
+                         font-family:'Malgun Gothic',Arial,sans-serif;">
                 {esc(t.get('title', ''))}</h4>
               <p style="font-size:14px;color:#475569;line-height:1.6;margin:0;
-                        font-family:'Malgun Gothic',Arial,sans-serif;
-                        text-align:left;word-break:keep-all;word-wrap:break-word;">
+                        font-family:'Malgun Gothic',Arial,sans-serif;">
                 {esc(t.get('body', ''))}</p>
             </td>
           </tr>
         </table>"""
 
-    # Insights — table row 방식, word-break 추가
     insights_html = ""
     insights = data.get("insights", [])
     for i, ins in enumerate(insights):
@@ -1139,8 +1136,7 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
                                   line-height:1.6;{pad_top}
                                   font-family:'Malgun Gothic',Arial,sans-serif;">&#9658;</td>
           <td style="{bb}{pad_top}{pad_bot}font-size:14px;color:#451a03;line-height:1.6;
-                    font-family:'Malgun Gothic',Arial,sans-serif;
-                    text-align:left;word-break:keep-all;word-wrap:break-word;">{esc(ins)}</td>
+                    font-family:'Malgun Gothic',Arial,sans-serif;">{esc(ins)}</td>
         </tr>"""
 
     price_rows = build_price_section(price_data, usd_cny) if price_data else ""
@@ -1159,15 +1155,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
           -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }}
   table {{ border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }}
   a {{ text-decoration:none; }}
-  /* ★ 모바일 한국어 justify 문제 방지 */
-  p, td, th, h1, h2, h3, h4 {{
-    text-align:left;
-    word-break:keep-all;
-    word-wrap:break-word;
-    -webkit-hyphens:none;
-    hyphens:none;
-  }}
-  /* 프린트 배경색 유지 */
   @media print {{
     * {{
       -webkit-print-color-adjust: exact !important;
@@ -1175,21 +1162,13 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
       color-adjust: exact !important;
     }}
   }}
-  /* 모바일 반응형 */
-  @media screen and (max-width: 600px) {{
-    .email-outer {{ width:100% !important; }}
-    td {{ padding-left:16px !important; padding-right:16px !important; }}
-    h1 {{ font-size:20px !important; }}
-    h4 {{ font-size:14px !important; }}
-    p  {{ font-size:13px !important; }}
-  }}
 </style>
 </head>
 <body style="margin:0;padding:20px;background-color:#f8fafc;">
 
 <!--[if mso]><table align="center" width="680" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
 
-<table class="email-outer" align="center" width="100%" cellpadding="0" cellspacing="0" border="0"
+<table align="center" width="100%" cellpadding="0" cellspacing="0" border="0"
        style="max-width:680px;margin:0 auto;background-color:#ffffff;
               border:1px solid #e2e8f0;border-collapse:collapse;">
 
@@ -1197,16 +1176,14 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
   <tr>
     <td bgcolor="#0f2744" style="background-color:#0f2744;padding:40px 30px;">
       <h1 style="color:#ffffff;font-size:24px;font-weight:700;margin:0 0 10px 0;
-                 letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;
-                 text-align:left;word-break:keep-all;">
+                 letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;">
         BATTERY RECYCLING DAILY BRIEF</h1>
       <p style="color:#94a3b8;font-size:14px;margin:0;
-                font-family:'Malgun Gothic',Arial,sans-serif;text-align:left;">
+                font-family:'Malgun Gothic',Arial,sans-serif;">
         {today} &nbsp;|&nbsp; Battery Intelligence Report</p>
     </td>
   </tr>
 
-  <!-- SECTION 1 -->
   {price_rows}
 
   <!-- SECTION 2 -->
@@ -1268,10 +1245,10 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     <td bgcolor="#0f2744"
         style="background-color:#0f2744;padding:30px;text-align:center;">
       <p style="color:#94a3b8;font-size:13px;margin:0 0 10px 0;
-                font-family:'Malgun Gothic',Arial,sans-serif;text-align:center;">
+                font-family:'Malgun Gothic',Arial,sans-serif;">
         Battery Recycling Daily Brief &nbsp;|&nbsp; {today}</p>
       <p style="color:#64748b;font-size:12px;margin:0;
-                font-family:'Malgun Gothic',Arial,sans-serif;text-align:center;">
+                font-family:'Malgun Gothic',Arial,sans-serif;">
         &copy; Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
     </td>
   </tr>
