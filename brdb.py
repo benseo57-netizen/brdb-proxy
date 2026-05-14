@@ -641,9 +641,8 @@ def collect_rss():
                     continue
                 if is_stock_noise(title):
                     continue
-                if source != "SMM Metal":
-                    if not any(w in lt for w in WHITELIST):
-                        continue
+                if not any(w in lt for w in WHITELIST):
+                    continue
 
                 seen.add(link)
                 raw.append({
