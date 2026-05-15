@@ -331,6 +331,8 @@ def _fetch_lme_nickel() -> dict:
             return {}
 
         html = resp.text
+        # 디버그: 응답 첫 200자 출력 (차단 여부 확인용)
+        print(f"  LME 응답 첫 200자: {html[:200].replace(chr(10), ' ')}")
 
         # raw HTML에서 <td> 값 추출 (markdown 파이프 아님)
         raw_tds = re.findall(r'<td[^>]*>(.*?)</td>', html, re.DOTALL | re.IGNORECASE)
@@ -642,6 +644,12 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
         await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(4000)
 
+        # 데이터 추출 후 페이지 polling JS 강제 중단 (이벤트 루프 점유 방지)
+        try:
+            await page.evaluate("window.stop()")
+        except Exception:
+            pass
+
         price = await page.evaluate("""
             () => {
                 // 콤마 제거 후 탐색 — "191,760" → "191760"
@@ -763,6 +771,11 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
+                # GFEX 페이지 리소스 완전 해제 (live polling JS 종료)
+                try:
+                    await page.goto("about:blank", wait_until="commit", timeout=5000)
+                except Exception:
+                    pass
             elif t.get("method") == "lme":
                 # LME 3개월물 — 앞서 수집한 lme_ni 재사용
                 if lme_ni:
