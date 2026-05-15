@@ -330,32 +330,57 @@ def _fetch_lme_nickel() -> dict:
             print(f"  LME 니켈 HTTP {resp.status_code}")
             return {}
 
-        # "| 13. May 2026 | 19,020.00 | 19,240.00 | 275,778 |" 형태 파싱
-        rows = re.findall(
-            r'\|\s*(\d+\.\s+\w+\s+\d{4})\s*\|\s*([\d,]+\.\d+)\s*\|\s*([\d,]+\.\d+)',
-            resp.text
-        )
+        html = resp.text
+
+        # raw HTML에서 <td> 값 추출 (markdown 파이프 아님)
+        raw_tds = re.findall(r'<td[^>]*>(.*?)</td>', html, re.DOTALL | re.IGNORECASE)
+        # HTML 엔티티 정리
+        def clean_td(s):
+            return re.sub(r'<[^>]+>', '', s).replace('&nbsp;', ' ').replace('&amp;', '&').strip()
+        tds = [clean_td(t) for t in raw_tds if clean_td(t)]
+
+        date_re = re.compile(r'^\d+\.\s+\w+\s+\d{4}$')
+        num_re  = re.compile(r'^[\d,]+\.\d+$')
+
+        # 날짜 뒤에 숫자 3개(cash, 3month, stock) 묶기
+        rows = []
+        i = 0
+        while i < len(tds):
+            if date_re.match(tds[i]):
+                nums = []
+                j = i + 1
+                while j < len(tds) and len(nums) < 3:
+                    if num_re.match(tds[j]):
+                        nums.append(float(tds[j].replace(',', '')))
+                    elif nums:  # 숫자가 하나라도 있으면 비숫자에서 중단
+                        break
+                    j += 1
+                if len(nums) >= 2:
+                    rows.append((tds[i], nums[0], nums[1]))
+                i = j
+            else:
+                i += 1
+
         if len(rows) < 2:
-            print(f"  LME 니켈 행 파싱 실패 (rows={len(rows)})")
+            print(f"  LME 니켈 파싱 실패 (rows={len(rows)}, tds={len(tds)})")
+            print(f"  LME 샘플: {tds[:10]}")
             return {}
 
-        def p(s): return float(s.replace(",", ""))
-
-        cash    = p(rows[0][1])
-        m3      = p(rows[0][2])
-        prev_c  = p(rows[1][1])
-        prev_3m = p(rows[1][2])
+        cash    = rows[0][1]
+        m3      = rows[0][2]
+        prev_c  = rows[1][1]
+        prev_3m = rows[1][2]
 
         cash_pct = f"{(cash - prev_c)  / prev_c  * 100:+.2f}%"
         m3_pct   = f"{(m3   - prev_3m) / prev_3m * 100:+.2f}%"
 
-        print(f"  LME 니켈: Cash=${cash:,.0f}({cash_pct}), 3M=${m3:,.0f}({m3_pct}) [{rows[0][0].strip()}]")
+        print(f"  LME 니켈: Cash=${cash:,.0f}({cash_pct}), 3M=${m3:,.0f}({m3_pct}) [{rows[0][0]}]")
         return {
             "cash":     cash,
             "cash_pct": cash_pct,
             "m3":       m3,
             "m3_pct":   m3_pct,
-            "date":     rows[0][0].strip(),
+            "date":     rows[0][0],
         }
     except Exception as e:
         print(f"  LME 니켈 오류: {e}")
@@ -619,9 +644,11 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
         price = await page.evaluate("""
             () => {
-                const text = document.body ? (document.body.innerText || '') : '';
-                // LC 탄산리튬 현재 가격대: 100,000~300,000 CNY/t
-                // GFEX 다른 품목: 工业硅 8000~12000, 多晶硅 30000~50000 → 겹치지 않음
+                // 콤마 제거 후 탐색 — "191,760" → "191760"
+                const text = (document.body ? document.body.innerText : '')
+                             .replace(/[,，]/g, '');
+                // LC 탄산리튬: 100,000~300,000 CNY/t
+                // GFEX 타품목: 工业硅 8000~12000, 多晶硅 30000~50000 → 범위 겹침 없음
                 const nums = text.match(/[1-9]\\d{4,5}/g) || [];
                 for (const s of nums) {
                     const n = parseInt(s);
@@ -679,30 +706,31 @@ def _scrape_nim_api(target: dict) -> dict:
 
 async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     spot_results, futures_results = [], []
-    print("\n[SMM 시세 수집]")
+    print("\n[SMM·LME 시세 수집]")
 
-    # ── LME 니켈: 먼저 requests로 수집 (Playwright 불필요) ─────────
+    # ── LME 니켈: requests로 미리 수집 (순서는 코발트 다음에 삽입) ─────
     lme_ni = _fetch_lme_nickel()
-    if lme_ni:
-        spot_results.append({
-            "name":          "니켈",
-            "name_en":       "LME Nickel",
-            "source":        "LME",
-            "date":          lme_ni["date"],
-            "usd_excl":      lme_ni["cash"],
-            "cny_incl":      None,
-            "cny_excl":      round(lme_ni["cash"] * usd_cny),
-            "usd_metal":     None,   # 이미 금속가, 별도 환산 불필요
-            "cny_metal":     None,
-            "metal_content": None,
-            "metal_label":   None,
-            "change_pct":    lme_ni["cash_pct"],
-            "delayed":       True,   # T-1 표시
-            "status":        "OK",
-        })
-    else:
-        spot_results.append({"name": "니켈", "name_en": "LME Nickel",
-                              "source": "LME", "status": "ERROR: 수집 실패"})
+
+    def _make_lme_ni_entry():
+        if lme_ni:
+            return {
+                "name":          "니켈",
+                "name_en":       "LME Nickel",
+                "source":        "LME",
+                "date":          lme_ni["date"],
+                "usd_excl":      lme_ni["cash"],
+                "cny_incl":      None,
+                "cny_excl":      round(lme_ni["cash"] * usd_cny),
+                "usd_metal":     None,
+                "cny_metal":     None,
+                "metal_content": None,
+                "metal_label":   None,
+                "change_pct":    lme_ni["cash_pct"],
+                "delayed":       True,
+                "status":        "OK",
+            }
+        return {"name": "니켈", "name_en": "LME Nickel",
+                "source": "LME", "status": "ERROR: 수집 실패"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -723,6 +751,12 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             r = await _scrape_spot(page, t)
             spot_results.append(r)
             print("OK" if r["status"] == "OK" else f"W {r['status']}")
+            # ★ 코발트 다음에 LME 니켈 삽입 → 순서: 코발트, 니켈, TG리튬, BG리튬
+            if t["name"] == "황산코발트":
+                ni_entry = _make_lme_ni_entry()
+                spot_results.append(ni_entry)
+                status_str = f"${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "ERROR"
+                print(f"  현물: 니켈(LME) ... {status_str}")
             await asyncio.sleep(2)
 
         for t in FUTURES_EM:
@@ -1203,161 +1237,195 @@ def _pct_color(pct: str) -> str:
         return "#888888"
     return "#c0392b" if "+" in pct else "#2471a3"
 
-def _spot_label(name: str) -> str:
-    return name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
-
-def _fut_label(name: str) -> str:
-    return name.replace(" 선물", "")
+def _source_badge(source: str) -> str:
+    """출처 소형 배지 (SMM / LME)"""
+    colors = {"LME": ("#dbeafe", "#1d4ed8"), "SMM": ("#f0fdf4", "#15803d")}
+    bg, fg = colors.get(source, ("#f1f5f9", "#64748b"))
+    return (
+        f'<span style="display:inline-block;background:{bg};color:{fg};'
+        f'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+        f'margin-left:4px;vertical-align:middle;">{source}</span>'
+    )
 
 def build_price_section(price_data: dict, usd_cny: float) -> str:
     today   = datetime.now().strftime("%Y.%m.%d")
     spreads = compute_spreads(price_data)
 
+    # ── 스프레드 배지 ────────────────────────────────────────────
+    spread_badges = ""
+    for k, label in [("탄산리튬", "LC"), ("니켈", "Ni")]:
+        if k in spreads:
+            s   = spreads[k]
+            clr = "#c0392b" if s["spread"] > 0 else "#2563eb"
+            sep = "&nbsp;&nbsp;" if spread_badges else ""
+            spread_badges += (
+                f'{sep}<span style="display:inline-block;background:{clr};color:#fff;'
+                f'font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;">'
+                f'{label} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
+            )
+
+    # ── 현물 행 ─────────────────────────────────────────────────
     spot_rows = ""
     for r in price_data["spot"]:
-        ok  = r["status"] == "OK"
-        pct = r.get("change_pct", "N/A")
-        ml  = r.get("metal_label")
-        if ok and ml:
-            metal_cell = (
-                f"<b>{_fmt(r.get('usd_metal'), '$')}</b>"
-                f"<br><span style='color:#aaaaaa;font-size:11px;'>"
-                f"{_fmt(r.get('cny_metal'), 'CNY')}</span>"
+        ok      = r.get("status") == "OK"
+        name    = r.get("name", "")
+        src     = r.get("source", "SMM")
+        pct     = r.get("change_pct", "N/A") if ok else "N/A"
+        delayed = r.get("delayed", False)
+
+        # 품목 컬럼 배지
+        badges = _source_badge(src)
+        if name == "황산코발트":
+            badges += ('<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
+                       'font-size:9px;padding:1px 5px;border-radius:3px;margin-left:3px;'
+                       'vertical-align:middle;">참고</span>')
+        if delayed:
+            badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
+                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                       'margin-left:3px;vertical-align:middle;">T-1</span>')
+
+        # 단가 컬럼 (USD primary, CNY secondary)
+        if ok:
+            usd_str = _fmt(r.get("usd_excl"), "$")
+            cny_str = _fmt(r.get("cny_excl"), "CNY")
+            price_cell = (
+                f'<b style="font-size:13px;">{usd_str}</b>'
+                f'<br><span style="color:#aaaaaa;font-size:11px;">{cny_str}</span>'
             )
         else:
-            metal_cell = "—"
+            price_cell = '<span style="color:#aaaaaa;">—</span>'
 
-        label = _spot_label(r['name'])
-
-        # 황산코발트: "참고" 소형 배지
-        ref_badge = ""
-        if r["name"] == "황산코발트":
-            ref_badge = (
-                '<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
-                'font-size:9px;font-weight:400;padding:1px 5px;border-radius:3px;'
-                'margin-left:5px;vertical-align:middle;">'
-                '참고</span>'
+        # 추가정보 컬럼 (코발트만 Co금속환산, 나머지 —)
+        if ok and name == "황산코발트" and r.get("usd_metal"):
+            extra_cell = (
+                f'<b style="font-size:12px;">{_fmt(r.get("usd_metal"), "$")}</b>'
+                f'<br><span style="color:#aaaaaa;font-size:10px;">Co 금속환산</span>'
             )
-        # LME 니켈: "T-1" 소형 배지 (전일 결산가)
-        elif r.get("source") == "LME":
-            ref_badge = (
-                '<span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
-                'font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;'
-                'margin-left:5px;vertical-align:middle;">'
-                'T-1</span>'
-            )
+        elif ok and src == "LME":
+            extra_cell = '<span style="color:#94a3b8;font-size:11px;">직접 금속가</span>'
+        else:
+            extra_cell = '<span style="color:#d1d5db;">—</span>'
 
-        # LME 니켈 CNY: exchange rate 환산 (VAT 없음)
-        cny_display = _fmt(r.get('cny_excl'), 'CNY')
+        name_en = r.get("name_en", "")
+        # 탄산리튬 label: TG/BG prefix
+        label = name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
 
         spot_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;margin-bottom:3px;">{label}{ref_badge}</b><br>
-            <span style="font-size:11px;color:#8f9ba8;">{r['name_en']}</span>
+            <b style="font-size:13px;color:#0f2744;">{label}</b>{badges}<br>
+            <span style="font-size:11px;color:#8f9ba8;">{name_en}</span>
           </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {_fmt(r.get('usd_excl'), '$') if ok else '—'}<br>
-            <span style="color:#aaaaaa;font-size:11px;">{cny_display if ok else '—'}</span>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
+            {price_cell}
           </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;font-weight:700;color:#0f2744;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {metal_cell}
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
+            {extra_cell}
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">
             {pct}
           </td>
         </tr>"""
 
+    # ── 선물 행 ─────────────────────────────────────────────────
     fut_rows = ""
     for r in price_data["futures"]:
-        ok       = r["status"] == "OK"
-        pct      = r.get("change_pct", "N/A")
-        ve       = r.get("latest_vat_excl")
-        is_lme   = r.get("source") == "LME"
-        # LME: latest는 USD/t, latest_vat_excl은 CNY 환산
-        # GFEX: latest는 CNY(VAT포함), latest_vat_excl은 CNY(VAT제외)
-        usd_excl = round(r["latest"]) if (ok and is_lme) else (round(ve / usd_cny) if ve else None)
-        cny_excl = ve if ok else None
-        label    = _fut_label(r['name'])
+        ok      = r.get("status") == "OK"
+        src     = r.get("source", "")
+        is_lme  = r.get("exchange") == "LME"
+        pct     = r.get("change_pct", "N/A") if ok else "N/A"
+        delayed = r.get("delayed", False)
+        ticker  = r.get("ticker", "")
+        label   = r.get("name", "").replace(" 선물", "")
 
-        # LME T-1 배지
-        fut_badge = ""
-        if is_lme:
-            fut_badge = (
-                ' <span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
-                'font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;">T-1</span>'
-            )
+        # 품목 배지
+        f_badges = ""
+        if delayed:
+            f_badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
+                         'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                         'margin-left:4px;vertical-align:middle;">T-1</span>')
 
-        # 두 번째 컬럼: LME = "USD 결산가", 나머지 = "고시가(VAT포함)"
-        if is_lme and ok:
-            col2 = (
-                f'<span style="font-size:11px;color:#aaaaaa;">USD 결산가</span><br>'
-                f'<b style="color:#555555;">${r["latest"]:,.0f}</b>'
-            )
+        # 단가 컬럼
+        if ok:
+            if is_lme:
+                # LME: USD 직접 표시
+                usd = r.get("latest")
+                cny = r.get("latest_vat_excl")
+                price_f = (
+                    f'<b style="font-size:13px;">{_fmt(usd, "$")}</b>'
+                    f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(cny, "CNY")}</span>'
+                )
+            else:
+                # GFEX: CNY 기준 (VAT제외)
+                ve  = r.get("latest_vat_excl")
+                ue  = round(ve / usd_cny) if ve else None
+                price_f = (
+                    f'<b style="font-size:13px;">{_fmt(ue, "$")}</b>'
+                    f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(ve, "CNY")}</span>'
+                )
         else:
-            col2 = (
-                f'<span style="font-size:11px;color:#aaaaaa;">고시가(VAT포함)</span><br>'
-                f'<b style="color:#555555;">{_fmt(r.get("latest"), "CNY") if ok else "—"}</b>'
-            )
+            price_f = '<span style="color:#aaaaaa;">—</span>'
+
+        # 기준가 컬럼
+        if ok:
+            if is_lme:
+                ref = '<span style="font-size:11px;color:#94a3b8;">LME Official</span>'
+            else:
+                raw_cny = r.get("latest")
+                ref = (
+                    f'<span style="font-size:10px;color:#aaaaaa;">고시가(VAT포함)</span><br>'
+                    f'<b style="font-size:12px;color:#555;">{_fmt(raw_cny, "CNY")}</b>'
+                ) if raw_cny else '<span style="color:#d1d5db;">—</span>'
+        else:
+            ref = '<span style="color:#d1d5db;">—</span>'
 
         fut_rows += f"""
         <tr>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;display:block;margin-bottom:3px;">{label}{fut_badge}</b>
-            <span style="font-size:11px;color:#8f9ba8;">{r.get('ticker', '?')}</span>
+            <b style="font-size:13px;color:#0f2744;">{label}</b>{f_badges}<br>
+            <span style="font-size:11px;color:#8f9ba8;">{ticker}</span>
           </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:13px;color:#333333;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {_fmt(usd_excl, '$') if ok else '—'}<br>
-            <span style="color:#aaaaaa;font-size:11px;">{_fmt(cny_excl, 'CNY') if ok else '—'}</span>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
+            {price_f}
           </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-size:12px;color:#777777;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {col2}
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
+            {ref}
           </td>
           <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">
             {pct}
           </td>
         </tr>"""
-
-    spread_badges = ""
-    for k in ["탄산리튬", "니켈"]:
-        if k in spreads:
-            s      = spreads[k]
-            clr    = "#c0392b" if s["spread"] > 0 else "#2563eb"
-            spacer = "&nbsp;&nbsp;&nbsp;" if spread_badges else ""
-            spread_badges += (
-                f'{spacer}<span style="display:inline-block;background:{clr};color:#ffffff;'
-                f'font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;">'
-                f'{s["ticker"]} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
-            )
 
     return f"""
   <tr>
     <td bgcolor="#1e293b"
         style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
                letter-spacing:0.5px;padding:12px 30px;font-family:'Malgun Gothic',Arial,sans-serif;">
-      SECTION 1 &nbsp;<span style="color:#64748b;">/</span>&nbsp; SMM 배터리 소재 시세
+      SECTION 1 &nbsp;<span style="color:#64748b;">/</span>&nbsp; SMM·LME 배터리 소재 시세
     </td>
   </tr>
   <tr>
     <td bgcolor="#ffffff" style="background:#ffffff;padding:20px 6px 16px;">
-      <p style="margin:0 0 6px;font-size:12px;color:#64748b;padding:0 8px;
-                font-family:'Malgun Gothic',Arial,sans-serif;text-align:left;">
-        {today} · 증치세 제외 기준
+      <p style="margin:0 0 4px;font-size:12px;color:#64748b;padding:0 8px;
+                font-family:'Malgun Gothic',Arial,sans-serif;">
+        {today} · SMM 증치세제외 기준 · LME T-1 전일결산가
       </p>
-      <p style="margin:0 0 14px;padding:0 8px;text-align:left;line-height:1.6;">
-        {spread_badges}
+      <p style="margin:0 0 14px;padding:0 8px;">
+        {spread_badges if spread_badges else '&nbsp;'}
       </p>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              bgcolor="#ffffff"
              style="font-size:13px;background:#ffffff;border:1px solid #e2e8f0;border-collapse:collapse;">
         <thead>
           <tr bgcolor="#f8fafc" style="background:#f8fafc;">
-            <td style="padding:12px 14px;text-align:left;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">품목</td>
-            <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              금속화합물 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(CNY 증치세제외)</span></td>
-            <td style="padding:12px 14px;text-align:right;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              금속환산 USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">(Co20.5% · Ni: LME 직접)</span></td>
-            <td style="padding:12px 14px;text-align:center;font-size:12px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
+            <td style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
+              현물 (Spot) · 품목</td>
+            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
+              USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">CNY/t 환산</span></td>
+            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
+              추가정보</td>
+            <td style="padding:10px 14px;text-align:center;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
+              등락</td>
           </tr>
         </thead>
         <tbody>
@@ -1366,7 +1434,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
             <td colspan="4" bgcolor="#f1f5f9"
                 style="padding:8px 14px;background:#f1f5f9;font-size:11px;font-weight:700;
                        color:#64748b;text-align:center;font-family:'Malgun Gothic',Arial,sans-serif;">
-              선물 (Futures) · 증치세제외 환산 &nbsp;|&nbsp; USD/CNY {usd_cny:.2f}
+              선물 (Futures) &nbsp;|&nbsp; USD/CNY {usd_cny:.2f} &nbsp;|&nbsp; GFEX 증치세제외
             </td>
           </tr>
           {fut_rows}
@@ -1374,7 +1442,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
       </table>
       <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        출처: Co·Li 현물 SMM (Shanghai Metals Market) · Ni 현물/선물 LME via Westmetall (T-1 전일 결산가) · LC 선물 GFEX · 증치세 제외 = 포함가 ÷ 1.13
+        출처: Co·Li 현물 <b>SMM</b> · Ni 현물/선물 <b>LME</b> via Westmetall (T-1 전일결산가) · LC 선물 <b>GFEX</b> · 증치세제외 = 포함가÷1.13
       </p>
     </td>
   </tr>"""
@@ -1645,4 +1713,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
