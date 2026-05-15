@@ -325,7 +325,11 @@ async def _scrape_lme_nickel_playwright(page) -> dict:
             wait_until="domcontentloaded",
             timeout=30000
         )
-        await page.wait_for_timeout(5000)   # JS 렌더링 대기
+        await page.wait_for_timeout(8000)   # JS 렌더링 충분히 대기
+
+        # 디버그: body 앞부분 출력
+        body_text = await page.inner_text("body")
+        print(f"  LME body 샘플: {body_text[:300].replace(chr(10), ' ')}")
 
         # "LME Nickel Official Prices" 테이블에서 Cash·3M Offer 추출
         result = await page.evaluate("""
@@ -778,23 +782,23 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
                 # GFEX live polling 완전 제거: 브라우저 재시작
-                # (page.close() / about:blank 는 WebSocket 연결로 인해 blocking 발생)
+                # browser.close()가 blocking될 수 있으므로 8초 timeout 강제 적용
                 try:
-                    await browser.close()
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-                    )
-                    ctx  = await browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                        ),
-                        locale="en-US",
-                    )
-                    page = await ctx.new_page()
-                except Exception as e:
-                    print(f"  브라우저 재시작 오류: {e}")
+                    await asyncio.wait_for(browser.close(), timeout=8.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass  # timeout 초과 시 그냥 새 브라우저 시작
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                )
+                ctx  = await browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                )
+                page = await ctx.new_page()
             elif t.get("method") == "lme":
                 # LME 3개월물 — 앞서 수집한 lme_ni 재사용
                 if lme_ni:
@@ -931,6 +935,13 @@ def collect_rss():
                 is_atom_dbg = root.tag.endswith("feed")
                 dbg_entries = root.findall(".//atom:entry", ns_dbg) if is_atom_dbg else root.findall(".//item")
                 print(f"  SMM 피드 파싱: is_atom={is_atom_dbg}, entries={len(dbg_entries)}")
+                # XML 구조 샘플 출력 (첫 번째 entry)
+                if dbg_entries:
+                    e0 = dbg_entries[0]
+                    for child in e0:
+                        tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                        itertext_val = repr(''.join(child.itertext())[:60])
+                        print(f"    <{tag}> text={repr((child.text or '')[:40])} itertext={itertext_val} attrib={child.attrib}")
             else:
                 q   = item["q"] + " when:3d"
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
@@ -1761,3 +1772,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
