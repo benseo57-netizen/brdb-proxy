@@ -43,7 +43,7 @@ FUTURES_EM = [
     {
         "name":      "탄산리튬 선물",
         "exchange":  "GFEX",
-        "url":       "https://www.metal.com/gfex",   # SMM GFEX 전용 페이지 (Playwright)
+        "url":       "https://www.metal.com/gfex",
         "ticker":    "LCM",
         "method":    "playwright",
         "sina_code": "nf_LCM",
@@ -51,10 +51,8 @@ FUTURES_EM = [
     {
         "name":      "니켈 선물",
         "exchange":  "LME",
-        "url":       None,
         "ticker":    "LME·3M",
-        "method":    "lme",                           # westmetall.com (requests)
-        "sina_code": None,
+        "method":    "cnyes",   # cnyes.com Playwright → LME 3M Closing Price (day-delayed)
     },
 ]
 
@@ -314,133 +312,6 @@ def get_usd_cny_rate() -> float:
         return 7.25
 
 
-async def _scrape_lme_nickel_playwright(page) -> dict:
-    """LME 공식 사이트에서 니켈 Cash · 3-month Offer 가격 수집 (Playwright).
-    Offer = 공식 종가(Settlement) 기준. 전일 결산가 (T-1).
-    Returns: {cash, cash_pct, m3, m3_pct, date}
-    """
-    try:
-        await page.goto(
-            "https://www.lme.com/metals/non-ferrous/lme-nickel#Summary",
-            wait_until="domcontentloaded",
-            timeout=30000
-        )
-        await page.wait_for_timeout(8000)   # JS 렌더링 충분히 대기
-
-        # 디버그: body 앞부분 출력
-        body_text = await page.inner_text("body")
-        print(f"  LME body 샘플: {body_text[:300].replace(chr(10), ' ')}")
-
-        # "LME Nickel Official Prices" 테이블에서 Cash·3M Offer 추출
-        result = await page.evaluate("""
-            () => {
-                const rows = Array.from(document.querySelectorAll('tr'));
-                let cash = null, m3 = null;
-                for (const row of rows) {
-                    const cells = Array.from(row.querySelectorAll('td'));
-                    if (cells.length < 3) continue;
-                    const label = cells[0].textContent.trim();
-                    const offer  = parseFloat(cells[2].textContent.replace(/[^0-9.]/g, ''));
-                    if (label === 'Cash'    && offer > 10000) cash = offer;
-                    if (label === '3-month' && offer > 10000) m3   = offer;
-                    if (cash && m3) break;
-                }
-                return {cash, m3};
-            }
-        """)
-
-        cash = result.get("cash")
-        m3   = result.get("m3")
-
-        if not cash or not m3:
-            print(f"  LME Playwright 파싱 실패: cash={cash}, m3={m3}")
-            return {}
-
-        # 등락률: 페이지 상단 hero에서 % 추출 (3-month closing)
-        text  = await page.inner_text("body")
-        pct_m = re.search(r'([+\-]\d+\.\d+)%', text)
-        m3_pct = f"{float(pct_m.group(1)):+.2f}%" if pct_m else "N/A"
-
-        # cash 전일 등락은 페이지에 없음 → m3_pct 참고용으로 동일 사용
-        print(f"  LME Nickel (lme.com): Cash=${cash:,.0f}, 3M=${m3:,.0f} ({m3_pct})")
-        return {
-            "cash":     cash,
-            "cash_pct": m3_pct,   # T-1 기준, 페이지에 Cash 단독 pct 없음
-            "m3":       m3,
-            "m3_pct":   m3_pct,
-            "date":     datetime.now().strftime("%d. %b %Y"),
-        }
-
-    except Exception as e:
-        print(f"  LME lme.com 오류: {e}")
-        return {}
-    try:
-        resp = requests.get(
-            "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash",
-            timeout=10,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
-        if resp.status_code != 200:
-            print(f"  LME 니켈 HTTP {resp.status_code}")
-            return {}
-
-        html = resp.text
-        # 디버그: 응답 첫 200자 출력 (차단 여부 확인용)
-        print(f"  LME 응답 첫 200자: {html[:200].replace(chr(10), ' ')}")
-
-        # raw HTML에서 <td> 값 추출 (markdown 파이프 아님)
-        raw_tds = re.findall(r'<td[^>]*>(.*?)</td>', html, re.DOTALL | re.IGNORECASE)
-        # HTML 엔티티 정리
-        def clean_td(s):
-            return re.sub(r'<[^>]+>', '', s).replace('&nbsp;', ' ').replace('&amp;', '&').strip()
-        tds = [clean_td(t) for t in raw_tds if clean_td(t)]
-
-        date_re = re.compile(r'^\d+\.\s+\w+\s+\d{4}$')
-        num_re  = re.compile(r'^[\d,]+\.\d+$')
-
-        # 날짜 뒤에 숫자 3개(cash, 3month, stock) 묶기
-        rows = []
-        i = 0
-        while i < len(tds):
-            if date_re.match(tds[i]):
-                nums = []
-                j = i + 1
-                while j < len(tds) and len(nums) < 3:
-                    if num_re.match(tds[j]):
-                        nums.append(float(tds[j].replace(',', '')))
-                    elif nums:  # 숫자가 하나라도 있으면 비숫자에서 중단
-                        break
-                    j += 1
-                if len(nums) >= 2:
-                    rows.append((tds[i], nums[0], nums[1]))
-                i = j
-            else:
-                i += 1
-
-        if len(rows) < 2:
-            print(f"  LME 니켈 파싱 실패 (rows={len(rows)}, tds={len(tds)})")
-            print(f"  LME 샘플: {tds[:10]}")
-            return {}
-
-        cash    = rows[0][1]
-        m3      = rows[0][2]
-        prev_c  = rows[1][1]
-        prev_3m = rows[1][2]
-
-        cash_pct = f"{(cash - prev_c)  / prev_c  * 100:+.2f}%"
-        m3_pct   = f"{(m3   - prev_3m) / prev_3m * 100:+.2f}%"
-
-        print(f"  LME 니켈: Cash=${cash:,.0f}({cash_pct}), 3M=${m3:,.0f}({m3_pct}) [{rows[0][0]}]")
-        return {
-            "cash":     cash,
-            "cash_pct": cash_pct,
-            "m3":       m3,
-            "m3_pct":   m3_pct,
-            "date":     rows[0][0],
-        }
-    except Exception as e:
-        print(f"  LME 니켈 오류: {e}")
-        return {}
 
 
 async def _scrape_spot(page, target: dict) -> dict:
@@ -715,116 +586,217 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
+async def _scrape_cnyes_ni3m(page) -> dict:
+    """cnyes.com에서 LME 니켈 3M Closing Price 수집 (Playwright).
+    lme.com "Closing Prices (day-delayed)"와 동일한 공식 LME 데이터.
+    (LME Official Prices = 링 결산가 / Closing Price = LMEselect 전자거래 마감가)
+    Returns: {m3, m3_pct, date}
+    """
+    try:
+        await page.goto(
+            "https://www.cnyes.com/futures/html5chart/nd3m.html",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        await page.wait_for_timeout(5000)
+
+        body = await page.inner_text("body")
+
+        # ── 방법 1: 차트 바 텍스트 파싱 ─────────────────────────────────
+        # 형식: "20260514 收 18899.000000 -278.000000(-1.45%) 開 ..."
+        m = re.search(
+            r"(\d{8})\s+收\s*([\d,]+\.?\d*)"      # 날짜, 종가(收盤價)
+            r"\s+[\d,\-\.]+\(([\+\-][\d\.]+)%\)",  # 등락률(漲%)
+            body,
+        )
+        if m:
+            date_str = m.group(1)                          # 20260514
+            close    = float(m.group(2).replace(",", ""))  # 18899.0
+            pct      = f"{float(m.group(3)):+.2f}%"        # -1.45%
+            date_fmt = f"{date_str[6:8]}. {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][int(date_str[4:6])-1]} {date_str[:4]}"
+            print(f"  cnyes.com 3M: ${close:,.0f} ({pct}) [{date_fmt}]")
+            return {"m3": close, "m3_pct": pct, "date": date_fmt}
+
+        # ── 방법 2: 테이블 행 파싱 (차트 바 없을 경우 폴백) ─────────────
+        # 형식: "20260514  18,899.000 -278.00  -1.45  19,180.000 ..."
+        m2 = re.search(
+            r"(\d{8})\s+"                   # 日期
+            r"([\d,]+\.?\d*)"               # 收盤價 (종가)
+            r"[\d\s,\.\-]+"                 # 漲跌 skip
+            r"([\-\d\.]+)\s+"               # 漲% (등락률)
+            r"[\d,]+\.?\d*\s+"              # 開盤價 skip
+            r"[\d,]+\.?\d*\s+"              # 最高價 skip
+            r"[\d,]+\.?\d*\s+"              # 最低價 skip
+            r"([\d,]+\.?\d*)",              # 昨收 (전일 종가)
+            body,
+        )
+        if m2:
+            close = float(m2.group(2).replace(",", ""))
+            pct   = f"{float(m2.group(3)):+.2f}%"
+            print(f"  cnyes.com 3M (테이블): ${close:,.0f} ({pct})")
+            return {"m3": close, "m3_pct": pct, "date": datetime.now().strftime("%d. %b %Y")}
+
+        print("  cnyes.com 3M: 패턴 매칭 실패")
+        return {}
+
+    except Exception as e:
+        print(f"  cnyes.com 3M 오류: {e}")
+        return {}
+
+
+def _fetch_lme_nickel_kpi() -> dict:
+    """한국물가정보(kpi.or.kr)에서 LME 니켈 Cash Settlement 수집.
+    출처: LME 공식 T-1 결산가. EUC-KR 정적 HTML 테이블.
+    Returns: {cash, cash_pct, date} or {}
+    """
+    try:
+        r = requests.get(
+            "https://www.kpi.or.kr/www/contents/lme.asp?CFG_CD=con_09",
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,*/*;q=0.8",
+                "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            },
+            timeout=10,
+        )
+        r.encoding = "euc-kr"
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.DOTALL):
+            cells = [
+                re.sub(r"<[^>]+>", "", c).strip()
+                for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
+            ]
+            cells = [c for c in cells if c]
+            if not any("니켈" in c or "(Ni)" in c for c in cells):
+                continue
+            nums = []
+            for c in cells:
+                m = re.search(r"([\d,]+\.?\d*)", c)
+                if m:
+                    try:
+                        v = float(m.group(1).replace(",", ""))
+                        if 15_000 < v < 25_000:
+                            nums.append(v)
+                    except ValueError:
+                        pass
+            if len(nums) >= 2:
+                cash, cash_prev = nums[0], nums[1]
+                pct = (cash - cash_prev) / cash_prev * 100
+                return {
+                    "cash":     cash,
+                    "cash_pct": f"{pct:+.2f}%",
+                    "date":     datetime.now().strftime("%d. %b %Y"),
+                }
+    except Exception as e:
+        print(f"  LME 니켈 오류 (kpi.or.kr): {e}")
+    return {}
+
+
 async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
+    """현물(SMM) + LME 니켈(kpi.or.kr) + 선물(GFEX) 시세 수집."""
     spot_results, futures_results = [], []
     print("\n[SMM·LME 시세 수집]")
 
-    lme_ni = {}   # Playwright 브라우저 기동 후 수집
+    # ── LME 니켈 현물: kpi.or.kr (requests, Playwright 불필요) ─────────────
+    print("  LME 니켈 수집 중...", end=" ", flush=True)
+    lme_ni = _fetch_lme_nickel_kpi()
+    print(f"OK ${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "W 실패")
 
-    def _make_lme_ni_entry():
-        if lme_ni:
-            return {
-                "name":          "니켈",
-                "name_en":       "LME Nickel",
-                "source":        "LME",
-                "date":          lme_ni["date"],
-                "usd_excl":      lme_ni["cash"],
-                "cny_incl":      None,
-                "cny_excl":      round(lme_ni["cash"] * usd_cny),
-                "usd_metal":     None,
-                "cny_metal":     None,
-                "metal_content": None,
-                "metal_label":   None,
-                "change_pct":    lme_ni["cash_pct"],
-                "delayed":       True,
-                "status":        "OK",
-            }
-        return {"name": "니켈", "name_en": "LME Nickel",
-                "source": "LME", "status": "ERROR: 수집 실패"}
+    # ── Playwright 브라우저 (SMM 현물 + GFEX 선물) ──────────────────────────
+    CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+    BROWSER_UA    = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
-        ctx = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-        page = await ctx.new_page()
+        browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+        ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
+        page    = await ctx.new_page()
 
-        # ── LME 니켈: lme.com Playwright 수집 ─────────────────────────
-        print("  LME 니켈 수집 중...", end=" ", flush=True)
-        lme_ni = await _scrape_lme_nickel_playwright(page)
-        if lme_ni:
-            print(f"OK Cash=${lme_ni['cash']:,.0f}, 3M=${lme_ni['m3']:,.0f}")
-        else:
-            print("W 실패")
-
+        # ── 현물: SMM (www-old.metal.com) ───────────────────────────────────
         for t in SPOT_TARGETS:
             print(f"  현물: {t['name']} ...", end=" ", flush=True)
             r = await _scrape_spot(page, t)
             spot_results.append(r)
             print("OK" if r["status"] == "OK" else f"W {r['status']}")
-            # ★ 코발트 다음에 LME 니켈 삽입 → 순서: 코발트, 니켈, TG리튬, BG리튬
+
+            # 코발트 직후에 LME 니켈 삽입
             if t["name"] == "황산코발트":
-                ni_entry = _make_lme_ni_entry()
+                if lme_ni:
+                    ni_entry = {
+                        "name":          "니켈",
+                        "name_en":       "LME Nickel",
+                        "source":        "LME",
+                        "date":          lme_ni["date"],
+                        "usd_excl":      lme_ni["cash"],
+                        "cny_incl":      None,
+                        "cny_excl":      round(lme_ni["cash"] * usd_cny),
+                        "usd_metal":     None,
+                        "cny_metal":     None,
+                        "metal_content": None,
+                        "metal_label":   None,
+                        "change_pct":    lme_ni["cash_pct"],
+                        "delayed":       True,
+                        "status":        "OK",
+                    }
+                else:
+                    ni_entry = {"name": "니켈", "name_en": "LME Nickel",
+                                "source": "LME", "status": "ERROR: 수집 실패"}
                 spot_results.append(ni_entry)
                 status_str = f"${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "ERROR"
                 print(f"  현물: 니켈(LME) ... {status_str}")
+
             await asyncio.sleep(2)
+
+        # ── 선물: GFEX (Playwright) ──────────────────────────────────────────
+        # cnyes.com 니켈 3M을 GFEX 전에 수집 (같은 브라우저 사용)
+        print("  LME 3M 수집 중 (cnyes.com)...", end=" ", flush=True)
+        ni3m = await _scrape_cnyes_ni3m(page)
+        if not ni3m:
+            print("W 실패")
 
         for t in FUTURES_EM:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
-                # GFEX live polling 완전 제거: 브라우저 재시작
-                # browser.close()가 blocking될 수 있으므로 8초 timeout 강제 적용
+                futures_results.append(r)
+                print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
+                # GFEX 종료 후 browser 재시작
                 try:
                     await asyncio.wait_for(browser.close(), timeout=8.0)
                 except (asyncio.TimeoutError, Exception):
-                    pass  # timeout 초과 시 그냥 새 브라우저 시작
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-                )
-                ctx  = await browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                    locale="en-US",
-                )
-                page = await ctx.new_page()
-            elif t.get("method") == "lme":
-                # LME 3개월물 — 앞서 수집한 lme_ni 재사용
-                if lme_ni:
+                    pass
+                browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+                ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
+                page    = await ctx.new_page()
+            elif t.get("method") == "cnyes":
+                # cnyes.com에서 수집한 ni3m 재사용
+                if ni3m:
                     r = {
                         "name":            t["name"],
                         "exchange":        "LME",
                         "ticker":          "LME·3M",
-                        "source":          "LME",
-                        "date":            lme_ni["date"],
-                        "latest":          round(lme_ni["m3"]),
-                        "latest_vat_excl": round(lme_ni["m3"] * usd_cny),
-                        "change_pct":      lme_ni["m3_pct"],
+                        "source":          "cnyes.com",
+                        "date":            ni3m["date"],
+                        "latest":          round(ni3m["m3"]),
+                        "latest_vat_excl": round(ni3m["m3"] * usd_cny),
+                        "change_pct":      ni3m["m3_pct"],
                         "delayed":         True,
                         "status":          "OK",
                     }
-                    print(f"OK (LME·3M ${lme_ni['m3']:,.0f})")
+                    print(f"OK (3M ${ni3m['m3']:,.0f})")
                 else:
                     r = {"name": t["name"], "exchange": "LME",
-                         "ticker": "LME·3M", "status": "ERROR: LME 데이터 없음"}
-                    print("W LME 데이터 없음")
+                         "ticker": "LME·3M", "status": "ERROR: 수집 실패"}
+                    print("W 실패")
                 futures_results.append(r)
-                continue
             else:
                 r = _scrape_nim_api(t)
-            futures_results.append(r)
-            print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
+                futures_results.append(r)
+                print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
 
         await browser.close()
 
@@ -930,18 +902,6 @@ def collect_rss():
                 if resp.status_code != 200:
                     continue
                 root = ET.fromstring(resp.content)
-                # 디버그: 피드 엔트리 수 확인
-                ns_dbg = {"atom": "http://www.w3.org/2005/Atom"}
-                is_atom_dbg = root.tag.endswith("feed")
-                dbg_entries = root.findall(".//atom:entry", ns_dbg) if is_atom_dbg else root.findall(".//item")
-                print(f"  SMM 피드 파싱: is_atom={is_atom_dbg}, entries={len(dbg_entries)}")
-                # XML 구조 샘플 출력 (첫 번째 entry)
-                if dbg_entries:
-                    e0 = dbg_entries[0]
-                    for child in e0:
-                        tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                        itertext_val = repr(''.join(child.itertext())[:60])
-                        print(f"    <{tag}> text={repr((child.text or '')[:40])} itertext={itertext_val} attrib={child.attrib}")
             else:
                 q   = item["q"] + " when:3d"
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
@@ -995,9 +955,8 @@ def collect_rss():
                     continue
 
                 pub_date = parse_date(pub_str)
-                if pub_date and pub_date < cutoff:
-                    if is_smm:
-                        print(f"  SMM 필터: 오래됨({pub_date.date()}) | {title[:40]}")
+                # Google Alerts는 날짜를 1970-01-01로 반환 → SMM은 날짜 필터 건너뜀
+                if not is_smm and pub_date and pub_date < cutoff:
                     continue
 
                 if "metal.com" in link.lower():
@@ -1772,4 +1731,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
