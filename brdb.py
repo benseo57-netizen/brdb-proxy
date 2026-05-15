@@ -432,57 +432,6 @@ async def _scrape_spot(page, target: dict) -> dict:
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
 
-
-def _fetch_lme_nickel() -> dict:
-    """westmetall.com에서 LME 니켈 현물(Cash) + 3개월물 수집.
-    순수 정적 HTML 테이블 → requests만 사용, Playwright 불필요.
-    전일 공식 결산가 기준 (T-1 / 1일 지연).
-
-    Returns:
-        {"cash": float, "m3": float, "date": str, "cash_pct": str, "m3_pct": str}
-        실패 시 빈 dict {}
-    """
-    url = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
-    try:
-        resp = requests.get(url, timeout=10, headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://www.westmetall.com/en/markdaten.php",
-        })
-        resp.raise_for_status()
-
-        # 테이블 행 파싱: "| 13. May 2026 | 19,020.00 | 19,240.00 | 275,778 |"
-        rows = re.findall(
-            r'\|\s*(\d+\.\s+\w+\s+\d{4})\s*\|\s*([\d,]+\.?\d*)\s*\|\s*([\d,]+\.?\d*)',
-            resp.text
-        )
-        if len(rows) < 2:
-            print(f"  LME Ni: 파싱 실패 (rows={len(rows)})")
-            return {}
-
-        today, prev = rows[0], rows[1]
-        cash   = float(today[1].replace(',', ''))
-        m3     = float(today[2].replace(',', ''))
-        cash_p = float(prev[1].replace(',', ''))
-        m3_p   = float(prev[2].replace(',', ''))
-
-        cash_pct = f"{(cash - cash_p) / cash_p * 100:+.2f}%"
-        m3_pct   = f"{(m3 - m3_p)   / m3_p   * 100:+.2f}%"
-
-        print(f"  LME Ni Cash: ${cash:,.0f} ({cash_pct})  |  3M: ${m3:,.0f} ({m3_pct})")
-        return {
-            "cash": cash, "m3": m3,
-            "date": today[0].strip(),
-            "cash_pct": cash_pct, "m3_pct": m3_pct,
-        }
-    except Exception as e:
-        print(f"  LME Ni 오류: {e}")
-        return {}
-
-
 def _fetch_sina_price(sina_code: str) -> tuple:
     """Sina Finance hq API로 선물 주연 최신가 수집.
     Playwright 불필요, requests로 즉시 반환.
@@ -771,9 +720,10 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
-                # GFEX 페이지 리소스 완전 해제 (live polling JS 종료)
+                # GFEX 페이지 완전 종료 후 새 페이지 생성 (live polling JS 완전 제거)
                 try:
-                    await page.goto("about:blank", wait_until="commit", timeout=5000)
+                    await page.close()
+                    page = await ctx.new_page()
                 except Exception:
                     pass
             elif t.get("method") == "lme":
@@ -907,6 +857,11 @@ def collect_rss():
                 if resp.status_code != 200:
                     continue
                 root = ET.fromstring(resp.content)
+                # 디버그: 피드 엔트리 수 확인
+                ns_dbg = {"atom": "http://www.w3.org/2005/Atom"}
+                is_atom_dbg = root.tag.endswith("feed")
+                dbg_entries = root.findall(".//atom:entry", ns_dbg) if is_atom_dbg else root.findall(".//item")
+                print(f"  SMM 피드 파싱: is_atom={is_atom_dbg}, entries={len(dbg_entries)}")
             else:
                 q   = item["q"] + " when:3d"
                 url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
@@ -948,10 +903,18 @@ def collect_rss():
                     )[:200]
 
                 if not title or not link or link in seen:
+                    if is_smm and not title:
+                        print(f"  SMM 필터: 제목없음")
+                    elif is_smm and not link:
+                        print(f"  SMM 필터: 링크없음 | 제목={title[:40]}")
+                    elif is_smm and link in seen:
+                        print(f"  SMM 필터: 중복 | {title[:40]}")
                     continue
 
                 pub_date = parse_date(pub_str)
                 if pub_date and pub_date < cutoff:
+                    if is_smm:
+                        print(f"  SMM 필터: 오래됨({pub_date.date()}) | {title[:40]}")
                     continue
 
                 if "metal.com" in link.lower():
