@@ -52,7 +52,7 @@ FUTURES_EM = [
         "name":      "니켈 선물",
         "exchange":  "LME",
         "ticker":    "LME·3M",
-        "method":    "cnyes",   # cnyes.com Playwright → LME 3M Closing Price (day-delayed)
+        "method":    "metalradar",   # metalradar.com Playwright → LME 3M Official Ask (=lme.com 공식)
     },
 ]
 
@@ -150,8 +150,8 @@ QUERIES = [
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
      "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
-    {"direct_url": "https://www.google.com/alerts/feeds/03699096368296272379/11789334169558310879",
-     "lang": "en"},
+    {"q": 'site:news.metal.com (nickel OR cobalt OR lithium OR "black mass" OR recycling)',
+     "lang": "en", "gl": "US", "ceid": "US:en"},
 ]
 
 # ============================================================
@@ -586,61 +586,80 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
-async def _scrape_cnyes_ni3m(page) -> dict:
-    """cnyes.com에서 LME 니켈 3M Closing Price 수집 (Playwright).
-    lme.com "Closing Prices (day-delayed)"와 동일한 공식 LME 데이터.
-    (LME Official Prices = 링 결산가 / Closing Price = LMEselect 전자거래 마감가)
+def _fetch_westmetall_ni3m() -> dict:
+    """westmetall.com에서 LME 니켈 3M Official 수집 (requests).
+    테이블에서 T-1/T-2 두 행 파싱 → 등락률 계산.
+    Azure 리전에 따라 TCP 차단될 수 있음 → 실패 시 {} 반환.
     Returns: {m3, m3_pct, date}
     """
     try:
+        url  = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
+        resp = requests.get(url, timeout=12,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        if resp.status_code != 200:
+            return {}
+
+        # 테이블 행 파싱: 날짜 | Cash | 3M Ask | ...
+        # 예: ['15. May 2026', '18,390.00', '18,580.00', '275,778']
+        rows = re.findall(
+            r'<td[^>]*>\s*(\d{1,2}\.\s*\w+\s*\d{4})\s*</td>'   # 날짜
+            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>'             # Cash
+            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>',            # 3M Ask
+            resp.text
+        )
+        if len(rows) < 2:
+            print(f"  westmetall: 행 부족 ({len(rows)}개)")
+            return {}
+
+        def p(s): return float(s.replace(",", ""))
+
+        date_t1 = rows[0][0].strip()   # "15. May 2026"
+        m3_t1   = p(rows[0][2])        # T-1 3M Ask
+        m3_t2   = p(rows[1][2])        # T-2 3M Ask
+
+        if not (10_000 < m3_t1 < 30_000 and 10_000 < m3_t2 < 30_000):
+            return {}
+
+        pct = (m3_t1 - m3_t2) / m3_t2 * 100
+        print(f"  westmetall 3M: ${m3_t1:,.0f} ({pct:+.2f}%) [T-2: ${m3_t2:,.0f}]")
+        return {"m3": m3_t1, "m3_pct": f"{pct:+.2f}%", "date": date_t1}
+
+    except Exception as e:
+        print(f"  westmetall 3M 오류: {e}")
+        return {}
+
+
+async def _scrape_metalradar_ni3m(page) -> dict:
+    """LME 니켈 3M Official 수집.
+    1순위: westmetall.com (requests, Cash+3M 테이블, T-1/T-2 등락률 계산 가능)
+    2순위: metalradar.com (Playwright, Ask 가격만, pct=N/A)
+    Returns: {m3, m3_pct, date}
+    """
+    # ── 1순위: westmetall (requests) ────────────────────────────────────
+    result = _fetch_westmetall_ni3m()
+    if result:
+        return result
+
+    # ── 2순위: metalradar (Playwright) ──────────────────────────────────
+    print("  westmetall 실패 → metalradar.com 시도...")
+    try:
         await page.goto(
-            "https://www.cnyes.com/futures/html5chart/nd3m.html",
+            "https://metalradar.com/price/nickel/lme/official/3-month/cumulative-volume?includeOrigin=true",
             wait_until="domcontentloaded",
             timeout=30000,
         )
-        await page.wait_for_timeout(5000)
-
-        body = await page.inner_text("body")
-
-        # ── 방법 1: 차트 바 텍스트 파싱 ─────────────────────────────────
-        # 형식: "20260514 收 18899.000000 -278.000000(-1.45%) 開 ..."
-        m = re.search(
-            r"(\d{8})\s+收\s*([\d,]+\.?\d*)"      # 날짜, 종가(收盤價)
-            r"\s+[\d,\-\.]+\(([\+\-][\d\.]+)%\)",  # 등락률(漲%)
-            body,
-        )
-        if m:
-            date_str = m.group(1)                          # 20260514
-            close    = float(m.group(2).replace(",", ""))  # 18899.0
-            pct      = f"{float(m.group(3)):+.2f}%"        # -1.45%
-            date_fmt = f"{date_str[6:8]}. {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][int(date_str[4:6])-1]} {date_str[:4]}"
-            print(f"  cnyes.com 3M: ${close:,.0f} ({pct}) [{date_fmt}]")
-            return {"m3": close, "m3_pct": pct, "date": date_fmt}
-
-        # ── 방법 2: 테이블 행 파싱 (차트 바 없을 경우 폴백) ─────────────
-        # 형식: "20260514  18,899.000 -278.00  -1.45  19,180.000 ..."
-        m2 = re.search(
-            r"(\d{8})\s+"                   # 日期
-            r"([\d,]+\.?\d*)"               # 收盤價 (종가)
-            r"[\d\s,\.\-]+"                 # 漲跌 skip
-            r"([\-\d\.]+)\s+"               # 漲% (등락률)
-            r"[\d,]+\.?\d*\s+"              # 開盤價 skip
-            r"[\d,]+\.?\d*\s+"              # 最高價 skip
-            r"[\d,]+\.?\d*\s+"              # 最低價 skip
-            r"([\d,]+\.?\d*)",              # 昨收 (전일 종가)
-            body,
-        )
-        if m2:
-            close = float(m2.group(2).replace(",", ""))
-            pct   = f"{float(m2.group(3)):+.2f}%"
-            print(f"  cnyes.com 3M (테이블): ${close:,.0f} ({pct})")
-            return {"m3": close, "m3_pct": pct, "date": datetime.now().strftime("%d. %b %Y")}
-
-        print("  cnyes.com 3M: 패턴 매칭 실패")
-        return {}
-
+        await page.wait_for_timeout(6000)
+        body  = await page.inner_text("body")
+        m_ask = re.search(r'Ask\s*\$?([\d,]+\.?\d*)', body)
+        if not m_ask:
+            return {}
+        ask = float(m_ask.group(1).replace(",", ""))
+        if not (15_000 < ask < 25_000):
+            return {}
+        print(f"  metalradar 3M: ${ask:,.0f} (pct=N/A)")
+        return {"m3": ask, "m3_pct": "N/A", "date": datetime.now().strftime("%d. %b %Y")}
     except Exception as e:
-        print(f"  cnyes.com 3M 오류: {e}")
+        print(f"  metalradar 3M 오류: {e}")
         return {}
 
 
@@ -752,9 +771,9 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             await asyncio.sleep(2)
 
         # ── 선물: GFEX (Playwright) ──────────────────────────────────────────
-        # cnyes.com 니켈 3M을 GFEX 전에 수집 (같은 브라우저 사용)
-        print("  LME 3M 수집 중 (cnyes.com)...", end=" ", flush=True)
-        ni3m = await _scrape_cnyes_ni3m(page)
+        # metalradar.com 니켈 3M을 GFEX 전에 수집 (같은 브라우저 사용)
+        print("  LME 3M 수집 중 (metalradar.com)...", end=" ", flush=True)
+        ni3m = await _scrape_metalradar_ni3m(page)
         if not ni3m:
             print("W 실패")
 
@@ -772,14 +791,14 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                 browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
                 ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
                 page    = await ctx.new_page()
-            elif t.get("method") == "cnyes":
-                # cnyes.com에서 수집한 ni3m 재사용
+            elif t.get("method") == "metalradar":
+                # metalradar.com에서 수집한 ni3m 재사용
                 if ni3m:
                     r = {
                         "name":            t["name"],
                         "exchange":        "LME",
                         "ticker":          "LME·3M",
-                        "source":          "cnyes.com",
+                        "source":          "metalradar.com",
                         "date":            ni3m["date"],
                         "latest":          round(ni3m["m3"]),
                         "latest_vat_excl": round(ni3m["m3"] * usd_cny),
@@ -885,78 +904,40 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
 def collect_rss():
     now        = datetime.utcnow()
     cutoff_48h = now - timedelta(hours=48)
-    cutoff_72h = now - timedelta(hours=72)
     raw  = []
     seen = set()
 
     for item in QUERIES:
-        is_smm      = "direct_url" in item
-        cutoff      = cutoff_72h if is_smm else cutoff_48h
         is_priority = item.get("priority", False)
 
         try:
-            if is_smm:
-                url  = item["direct_url"]
-                resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-                print(f"SMM 피드 응답코드: {resp.status_code}")
-                if resp.status_code != 200:
-                    continue
-                root = ET.fromstring(resp.content)
-            else:
-                q   = item["q"] + " when:3d"
-                url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
-                       f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
-                       f"&cb={int(now.timestamp())}")
-                resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-                if resp.status_code != 200:
-                    continue
-                root = ET.fromstring(resp.content)
+            q   = item["q"] + " when:3d"
+            url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
+                   f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
+                   f"&cb={int(now.timestamp())}")
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
 
-            ns      = {"atom": "http://www.w3.org/2005/Atom"}
-            is_atom = root.tag.endswith("feed")
-            entries = root.findall(".//atom:entry", ns) if is_atom else root.findall(".//item")
+            entries = root.findall(".//item")
 
             for entry in entries:
-                if is_atom:
-                    title_el = entry.find("atom:title", ns) or entry.find("title")
-                    # Google Alerts <title type="html"><b>...</b></title> 구조 처리
-                    # title_el.text는 None → itertext()로 child element 포함 전체 text 추출
-                    raw_title = ''.join(title_el.itertext()) if title_el is not None else ""
-                    title     = decode_entities(raw_title)
-                    title     = re.sub(r'<[^>]+>', '', title).strip()
-                    link_el  = entry.find("atom:link", ns)
-                    link     = link_el.get("href", "") if link_el is not None else ""
-                    link     = extract_real_url(link)
-                    pub_str  = (entry.findtext("atom:published", "", ns) or
-                                entry.findtext("atom:updated", "", ns))
-                    source   = "SMM Metal"
-                    snippet  = decode_entities(re.sub(r'<[^>]+>', '', (
-                        entry.findtext("atom:summary", "", ns) or
-                        entry.findtext("atom:content", "", ns) or ""
-                    )))[:200]
-                else:
-                    title   = decode_entities((entry.findtext("title") or "").strip())
-                    link    = (entry.findtext("link") or "").strip()
-                    link    = extract_real_url(link)
-                    pub_str = (entry.findtext("pubDate") or "").strip()
-                    source_el = entry.find("source")
-                    source  = source_el.text.strip() if source_el is not None else ""
-                    snippet = decode_entities(
-                        re.sub(r'<[^>]+>', '', entry.findtext("description") or "")
-                    )[:200]
+                title   = decode_entities((entry.findtext("title") or "").strip())
+                link    = (entry.findtext("link") or "").strip()
+                link    = extract_real_url(link)
+                pub_str = (entry.findtext("pubDate") or "").strip()
+                source_el = entry.find("source")
+                source  = source_el.text.strip() if source_el is not None else ""
+                snippet = decode_entities(
+                    re.sub(r'<[^>]+>', '', entry.findtext("description") or "")
+                )[:200]
 
                 if not title or not link or link in seen:
-                    if is_smm and not title:
-                        print(f"  SMM 필터: 제목없음")
-                    elif is_smm and not link:
-                        print(f"  SMM 필터: 링크없음 | 제목={title[:40]}")
-                    elif is_smm and link in seen:
-                        print(f"  SMM 필터: 중복 | {title[:40]}")
                     continue
 
                 pub_date = parse_date(pub_str)
-                # Google Alerts는 날짜를 1970-01-01로 반환 → SMM은 날짜 필터 건너뜀
-                if not is_smm and pub_date and pub_date < cutoff:
+                if pub_date and pub_date < cutoff_48h:
                     continue
 
                 if "metal.com" in link.lower():
@@ -1731,3 +1712,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
