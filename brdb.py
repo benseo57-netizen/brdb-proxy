@@ -634,6 +634,7 @@ def _fetch_smm_articles(max_fetch: int = 8) -> list:
                     "source":   "SMM Metal",
                     "priority": False,
                     "pub_date": None,
+                    "lang":     "en",
                 })
                 fetched += 1
                 time.sleep(0.3)
