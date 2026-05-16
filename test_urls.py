@@ -1,24 +1,10 @@
 """
-metalradar.com T-2 날짜 파라미터 테스트
+metalradar.com 내부 API 엔드포인트 탐색 (network interception)
 """
-import asyncio, re
-from datetime import datetime, timedelta
+import asyncio, re, json
 from playwright.async_api import async_playwright
 
 async def main():
-    # T-2 날짜 계산 (주말 건너뜀)
-    today = datetime.now()
-    offset = 1
-    if today.weekday() == 0:    # 월요일 → 금요일
-        offset = 3
-    elif today.weekday() == 6:  # 일요일 → 금요일
-        offset = 2
-    t2_date = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
-    print(f"오늘: {today.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][today.weekday()]})")
-    print(f"T-2 날짜: {t2_date}")
-
-    BASE = "https://metalradar.com/price/nickel/lme/official/3-month/cumulative-volume?includeOrigin=true"
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -30,27 +16,34 @@ async def main():
         )
         page = await ctx.new_page()
 
-        async def fetch(url, label):
-            print(f"\n[{label}] {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(6000)
-            body = await page.inner_text("body")
-            m_ask = re.search(r'Ask\s*\$?([\d,]+\.?\d*)', body)
-            m_bid = re.search(r'Bid\s*\$?([\d,]+\.?\d*)', body)
-            print(f"  Bid: {m_bid.group(1) if m_bid else '❌'}")
-            print(f"  Ask: {m_ask.group(1) if m_ask else '❌'}")
-            nums = re.findall(r'1[89]\d?,\d{3}(?:\.\d+)?', body)
-            print(f"  범위 숫자: {nums[:8]}")
-            return float(m_ask.group(1).replace(",","")) if m_ask else None
+        # 모든 API 응답 캡처
+        api_calls = []
 
-        t1 = await fetch(BASE, "T-1 (최신)")
-        t2 = await fetch(f"{BASE}&date={t2_date}", f"T-2 ({t2_date})")
+        async def on_response(response):
+            url = response.url
+            ct = response.headers.get("content-type", "")
+            # JSON 응답만 필터
+            if "json" in ct and any(k in url for k in ["api", "price", "metal", "nickel", "lme"]):
+                try:
+                    body = await response.text()
+                    api_calls.append({"url": url, "body": body[:300]})
+                except:
+                    pass
 
-        if t1 and t2:
-            pct = (t1 - t2) / t2 * 100
-            print(f"\n✅ 등락률 계산: ({t1:,.0f} - {t2:,.0f}) / {t2:,.0f} = {pct:+.2f}%")
-        else:
-            print("\n❌ 계산 불가")
+        page.on("response", on_response)
+
+        print("metalradar.com 로딩 + API 캡처...")
+        await page.goto(
+            "https://metalradar.com/price/nickel/lme/official/3-month/cumulative-volume?includeOrigin=true",
+            wait_until="networkidle",
+            timeout=30000,
+        )
+        await page.wait_for_timeout(3000)
+
+        print(f"\n캡처된 JSON API 호출: {len(api_calls)}개")
+        for call in api_calls:
+            print(f"\n  URL: {call['url']}")
+            print(f"  Body: {call['body']}")
 
         await browser.close()
 
