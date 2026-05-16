@@ -150,7 +150,7 @@ QUERIES = [
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
      "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
-    {"q": 'site:news.metal.com (nickel OR cobalt OR lithium OR "black mass" OR recycling)',
+    {"q": '"news.metal.com" (nickel OR cobalt OR lithium OR "black mass" OR recycling)',
      "lang": "en", "gl": "US", "ceid": "US:en"},
 ]
 
@@ -160,6 +160,7 @@ QUERIES = [
 NOISE_KEYWORDS = [
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
     "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
+    "xiaomi", "samsung galaxy", "iphone", "smartwatch", "okosóra",
     "stock tip", "smartwatch",
     "battery etf", "lithium etf", "stocks:", "is it too late",
     "stock surges", "stock falls", "stock rises", "stock drops",
@@ -586,11 +587,69 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
+def _fetch_smm_articles(max_fetch: int = 8) -> list:
+    """news.metal.com 직접 스크래핑으로 최신 SMM 기사 수집 (requests).
+    목록 페이지 → 기사 ID → 각 기사 og:title/description 파싱.
+    날짜 필터 없이 목록 최신순 기사를 그대로 사용.
+    """
+    SMM_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    SMM_KEYWORDS = {
+        "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
+        "cathode", "precursor", "lme", "sulfate", "hydroxide", "carbonate",
+    }
+    try:
+        r = requests.get("https://news.metal.com/en/", timeout=12, headers=SMM_HEADERS)
+        if r.status_code != 200:
+            print(f"  SMM 직접: 목록 {r.status_code}")
+            return []
+        ids = list(dict.fromkeys(re.findall(r'/newscontent/(\d{8,})', r.text)))[:max_fetch * 2]
+        if not ids:
+            return []
+        articles = []
+        fetched = 0
+        for article_id in ids:
+            if fetched >= max_fetch:
+                break
+            try:
+                url = f"https://news.metal.com/newscontent/{article_id}"
+                r2  = requests.get(url, timeout=10, headers=SMM_HEADERS)
+                if r2.status_code != 200:
+                    continue
+                m_t = (re.search(r'property="og:title"\s+content="([^"]+)"', r2.text) or
+                       re.search(r'content="([^"]+)"\s+property="og:title"', r2.text))
+                if not m_t:
+                    continue
+                title = html_lib.unescape(m_t.group(1))
+                title = re.sub(r'\s*[-|]\s*Shanghai Metals Market.*$', '', title).strip()
+                lt = title.lower()
+                if not any(k in lt for k in SMM_KEYWORDS):
+                    continue
+                m_d = (re.search(r'property="og:description"\s+content="([^"]+)"', r2.text) or
+                       re.search(r'content="([^"]+)"\s+property="og:description"', r2.text))
+                snippet = html_lib.unescape(m_d.group(1))[:200] if m_d else ""
+                articles.append({
+                    "title":    title,
+                    "link":     url,
+                    "snippet":  snippet,
+                    "source":   "SMM Metal",
+                    "priority": False,
+                    "pub_date": None,
+                })
+                fetched += 1
+                time.sleep(0.3)
+            except Exception:
+                continue
+        print(f"  SMM 직접: {len(articles)}건 (ID {ids[0]}~)")
+        return articles
+    except Exception as e:
+        print(f"  SMM 직접 오류: {e}")
+        return []
+
+
 def _fetch_westmetall_ni3m() -> dict:
-    """westmetall.com에서 LME 니켈 3M Official 수집 (requests).
-    테이블에서 T-1/T-2 두 행 파싱 → 등락률 계산.
-    Azure 리전에 따라 TCP 차단될 수 있음 → 실패 시 {} 반환.
-    Returns: {m3, m3_pct, date}
+    """westmetall.com에서 LME 니켈 Cash + 3M Official 동시 수집 (requests).
+    T-1/T-2 두 행 파싱 → 등락률 계산. 리전에 따라 TCP 차단 가능 → {} 반환.
+    Returns: {cash, cash_pct, m3, m3_pct, date}
     """
     try:
         url  = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
@@ -599,12 +658,10 @@ def _fetch_westmetall_ni3m() -> dict:
         if resp.status_code != 200:
             return {}
 
-        # 테이블 행 파싱: 날짜 | Cash | 3M Ask | ...
-        # 예: ['15. May 2026', '18,390.00', '18,580.00', '275,778']
         rows = re.findall(
-            r'<td[^>]*>\s*(\d{1,2}\.\s*\w+\s*\d{4})\s*</td>'   # 날짜
-            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>'             # Cash
-            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>',            # 3M Ask
+            r'<td[^>]*>\s*(\d{1,2}\.\s*\w+\s*\d{4})\s*</td>'
+            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>'
+            r'\s*<td[^>]*>\s*([\d,]+\.?\d*)\s*</td>',
             resp.text
         )
         if len(rows) < 2:
@@ -613,19 +670,24 @@ def _fetch_westmetall_ni3m() -> dict:
 
         def p(s): return float(s.replace(",", ""))
 
-        date_t1 = rows[0][0].strip()   # "15. May 2026"
-        m3_t1   = p(rows[0][2])        # T-1 3M Ask
-        m3_t2   = p(rows[1][2])        # T-2 3M Ask
+        date_t1  = rows[0][0].strip()
+        cash_t1  = p(rows[0][1]);  cash_t2 = p(rows[1][1])
+        m3_t1    = p(rows[0][2]);  m3_t2   = p(rows[1][2])
 
-        if not (10_000 < m3_t1 < 30_000 and 10_000 < m3_t2 < 30_000):
+        if not (10_000 < cash_t1 < 30_000 and 10_000 < m3_t1 < 30_000):
             return {}
 
-        pct = (m3_t1 - m3_t2) / m3_t2 * 100
-        print(f"  westmetall 3M: ${m3_t1:,.0f} ({pct:+.2f}%) [T-2: ${m3_t2:,.0f}]")
-        return {"m3": m3_t1, "m3_pct": f"{pct:+.2f}%", "date": date_t1}
+        cash_pct = (cash_t1 - cash_t2) / cash_t2 * 100
+        m3_pct   = (m3_t1   - m3_t2)   / m3_t2   * 100
+        print(f"  westmetall Cash: ${cash_t1:,.0f} ({cash_pct:+.2f}%)  3M: ${m3_t1:,.0f} ({m3_pct:+.2f}%)")
+        return {
+            "cash":     cash_t1,  "cash_pct": f"{cash_pct:+.2f}%",
+            "m3":       m3_t1,    "m3_pct":   f"{m3_pct:+.2f}%",
+            "date":     date_t1,
+        }
 
     except Exception as e:
-        print(f"  westmetall 3M 오류: {e}")
+        print(f"  westmetall 오류: {e}")
         return {}
 
 
@@ -718,10 +780,17 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     spot_results, futures_results = [], []
     print("\n[SMM·LME 시세 수집]")
 
-    # ── LME 니켈 현물: kpi.or.kr (requests, Playwright 불필요) ─────────────
+    # ── LME 니켈: westmetall 먼저 (Cash+3M 동시), 실패 시 kpi.or.kr ────────
     print("  LME 니켈 수집 중...", end=" ", flush=True)
-    lme_ni = _fetch_lme_nickel_kpi()
-    print(f"OK ${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "W 실패")
+    wm = _fetch_westmetall_ni3m()       # {cash, cash_pct, m3, m3_pct, date} or {}
+    if wm:
+        lme_ni = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
+        ni3m_prefetch = wm              # Cash+3M 동시 확보
+        print(f"OK (westmetall) ${wm['cash']:,.0f} ({wm['cash_pct']})")
+    else:
+        lme_ni = _fetch_lme_nickel_kpi()
+        ni3m_prefetch = None
+        print(f"OK (kpi) ${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "W 실패")
 
     # ── Playwright 브라우저 (SMM 현물 + GFEX 선물) ──────────────────────────
     CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
@@ -771,9 +840,13 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
             await asyncio.sleep(2)
 
         # ── 선물: GFEX (Playwright) ──────────────────────────────────────────
-        # metalradar.com 니켈 3M을 GFEX 전에 수집 (같은 브라우저 사용)
-        print("  LME 3M 수집 중 (metalradar.com)...", end=" ", flush=True)
-        ni3m = await _scrape_metalradar_ni3m(page)
+        # westmetall에서 이미 3M을 가져왔으면 재수집 불필요
+        if ni3m_prefetch:
+            ni3m = ni3m_prefetch
+            print(f"  LME 3M: ${ni3m['m3']:,.0f} ({ni3m['m3_pct']}) ← westmetall")
+        else:
+            print("  LME 3M 수집 중 (metalradar.com)...", end=" ", flush=True)
+            ni3m = await _scrape_metalradar_ni3m(page)
         if not ni3m:
             print("W 실패")
 
@@ -995,6 +1068,12 @@ def collect_rss():
                     is_dup = True
                 break
         if not is_dup:
+            deduped.append(a)
+
+    # ── SMM 직접 스크래핑 (news.metal.com) ─────────────────────────────────
+    smm_direct = _fetch_smm_articles()
+    for a in smm_direct:
+        if not any(a["link"] == x.get("link") for x in deduped):
             deduped.append(a)
 
     sc = sum(1 for a in deduped if "SMM" in a.get("source", ""))
