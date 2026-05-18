@@ -122,7 +122,8 @@ QUERIES = [
      "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("nikel" OR "HPAL" OR "RKEF") ("harga" OR "ekspor" OR "tambang" OR "produksi" OR "kuota")',
+    # ★ 인도네시아어: 니켈 제련/시황 전용 쿼리 (tambang 단독 제거)
+    {"q": '("nikel" OR "HPAL" OR "RKEF") ("smelter" OR "hilirisasi nikel" OR "ferronickel" OR "nickel matte" OR "pemurnian")',
      "lang": "id", "gl": "ID", "ceid": "ID:id"},
     {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
@@ -261,10 +262,19 @@ WHITELIST = [
     "albemarle", "sqm", "ganfeng", "tianqi",
     "pilbara", "liontown", "arcadium", "sigma lithium",
     "circular economy", "생산자책임",
-    "nikel", "tambang", "rkef",
+    # 인도네시아어: 니켈 제련 특화 키워드 (tambang 단독은 WHITELIST에서 제거 → 쿼리 레벨에서 필터)
+    "nikel", "rkef", "hpal", "ferronickel", "hilirisasi",
     "akkumulátor", "akkuhulladék",
     "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
+]
+
+# ★ [추가] 인도네시아어 기사 니켈 제련/시황 strict 필터
+# WHITELIST의 "nikel" 하나만으론 일반 광업기사가 통과될 수 있어, 더 구체적인 키워드 필수
+_ID_NICKEL_STRICT = [
+    "nikel", "rkef", "hpal", "ferronickel", "nickel matte",
+    "hilirisasi nikel", "pemurnian nikel", "smelter nikel",
+    "nickel pig iron", "npi", "matte nikel",
 ]
 
 # ============================================================
@@ -298,6 +308,19 @@ def extract_real_url(url):
             return urllib.parse.unquote(match.group(1))
     return url
 
+# ★ [추가] KST 어제 자정 기준 cutoff 계산 (UTC 반환)
+def get_cutoff_utc() -> datetime:
+    """KST 기준 '어제 00:00' = UTC 기준 '어제 15:00'.
+    오늘이 5월 18일 KST이면 → 5월 17일 00:00 KST = 5월 16일 15:00 UTC.
+    이 시각 이전 기사는 모두 제외.
+    """
+    kst_offset = timedelta(hours=9)
+    now_kst    = datetime.utcnow() + kst_offset
+    # KST 기준 어제 자정
+    yesterday_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    # UTC 변환
+    return yesterday_kst - kst_offset
+
 # ============================================================
 # SMM 시세 수집
 # ============================================================
@@ -311,8 +334,6 @@ def get_usd_cny_rate() -> float:
     except Exception as e:
         print(f"  환율 조회 실패({e}), 기본값 7.25")
         return 7.25
-
-
 
 
 async def _scrape_spot(page, target: dict) -> dict:
@@ -359,10 +380,7 @@ async def _scrape_spot(page, target: dict) -> dict:
         return {**base, "status": f"ERROR: {e}"}
 
 def _fetch_sina_price(sina_code: str) -> tuple:
-    """Sina Finance hq API로 선물 주연 최신가 수집.
-    Playwright 불필요, requests로 즉시 반환.
-    Returns: (price_vat_incl: int | None, change_pct: str)
-    """
+    """Sina Finance hq API로 선물 주연 최신가 수집."""
     try:
         resp = requests.get(
             f"https://hq.sinajs.cn/list={sina_code.lower()}",
@@ -384,7 +402,6 @@ def _fetch_sina_price(sina_code: str) -> tuple:
         parts = [p.strip() for p in m.group(1).split(',')]
         print(f"  Sina [{sina_code}]: {parts[:9]}")
 
-        # 최신가: parts[1:8] 중 30000~600000 범위 첫 번째 숫자
         price = None
         for p in parts[1:8]:
             try:
@@ -395,7 +412,6 @@ def _fetch_sina_price(sina_code: str) -> tuple:
             except Exception:
                 continue
 
-        # 등락률: 昨결산(parts[7]) 기준 직접 계산
         change_pct = "N/A"
         if price and len(parts) > 7:
             try:
@@ -413,23 +429,13 @@ def _fetch_sina_price(sina_code: str) -> tuple:
 
 
 def _fetch_exchange_settlement(target: dict) -> tuple:
-    """거래소 공식 당일 결산가 API 수집 (Playwright 불필요).
-
-    SHFE (니켈): https://www.shfe.com.cn/data/dailydata/kx/kx{YYYYMMDD}.dat
-    GFEX (탄산리튬): http://www.gfex.com.cn 계열 API 시도
-
-    주계약 = 미결제약정(OPENINTEREST) 최대 계약.
-    Returns: (price_vat_incl: int | None, change_pct: str)
-    """
-    today = datetime.now().strftime("%Y%m%d")
+    """거래소 공식 당일 결산가 API 수집."""
+    today    = datetime.now().strftime("%Y%m%d")
     exchange = target["exchange"]
-    product  = target["ticker"].lower()  # "lcm" or "nim"
 
-    # ── SHFE 니켈 ────────────────────────────────────────────────────
     if exchange == "SHFE":
         urls = [
             f"https://www.shfe.com.cn/data/dailydata/kx/kx{today}.dat",
-            # 전날 데이터 fallback (주말/공휴일 등)
             f"https://www.shfe.com.cn/data/dailydata/kx/kx{(datetime.now() - timedelta(days=1)).strftime('%Y%m%d')}.dat",
         ]
         for url in urls:
@@ -447,7 +453,7 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                 ]
                 if not contracts:
                     continue
-                main = max(contracts, key=lambda x: float(x.get("OPENINTEREST") or 0))
+                main   = max(contracts, key=lambda x: float(x.get("OPENINTEREST") or 0))
                 settle = int(float(main["SETTLEMENTPRICE"]))
                 prev   = float(main.get("PRESETTLEMENTPRICE") or 0)
                 pct    = f"{(settle-prev)/prev*100:+.2f}%" if prev else "N/A"
@@ -458,9 +464,7 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                 print(f"  SHFE API 오류: {e}")
         return None, "N/A"
 
-    # ── GFEX 탄산리튬 ─────────────────────────────────────────────────
     elif exchange == "GFEX":
-        # GFEX 공식 일별 결산가 엔드포인트 (여러 패턴 시도)
         gfex_urls = [
             f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
             f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
@@ -477,9 +481,8 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                 raw = resp.text.strip()
                 if not raw or len(raw) < 10:
                     continue
-                # JSON 응답 시도
                 try:
-                    data = resp.json()
+                    data      = resp.json()
                     contracts = data if isinstance(data, list) else data.get("data", [])
                     contracts = [x for x in contracts
                                  if float(x.get("settlementPrice") or x.get("SETTLEMENTPRICE") or 0) > 0]
@@ -494,7 +497,6 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                     return settle, pct
                 except Exception:
                     pass
-                # 숫자 파싱 fallback
                 nums = re.findall(r'\b(1[0-9]{4,5}|[5-9][0-9]{4})\b', raw)
                 if nums:
                     settle = int(nums[0])
@@ -502,16 +504,14 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                     return settle, "N/A"
             except Exception as e:
                 print(f"  GFEX API 오류 ({url[:50]}): {e}")
-        print(f"  GFEX API 전체 실패 → N/A")
+        print("  GFEX API 전체 실패 → N/A")
         return None, "N/A"
 
     return None, "N/A"
 
 
 async def _scrape_lcm_playwright(page, target: dict) -> dict:
-    """www.metal.com/gfex Playwright로 탄산리튬 선물 주계약 가격 수집.
-    GFEX 전용 페이지라 LC 가격대(100,000~300,000 CNY/t)가 다른 품목과 겹치지 않음.
-    """
+    """www.metal.com/gfex Playwright로 탄산리튬 선물 주계약 가격 수집."""
     display = f"{target['exchange']}·{target['ticker']}"
     base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
@@ -519,19 +519,16 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
         await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(4000)
 
-        # 데이터 추출 후 페이지 polling JS 강제 중단 (이벤트 루프 점유 방지)
         try:
             await page.evaluate("window.stop()")
         except Exception:
             pass
 
+        # ── 가격 추출 (JS evaluate) ──────────────────────────────
         price = await page.evaluate("""
             () => {
-                // 콤마 제거 후 탐색 — "191,760" → "191760"
                 const text = (document.body ? document.body.innerText : '')
                              .replace(/[,，]/g, '');
-                // LC 탄산리튬: 100,000~300,000 CNY/t
-                // GFEX 타품목: 工业硅 8000~12000, 多晶硅 30000~50000 → 범위 겹침 없음
                 const nums = text.match(/[1-9]\\d{4,5}/g) || [];
                 for (const s of nums) {
                     const n = parseInt(s);
@@ -541,9 +538,34 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
             }
         """)
 
-        text = await page.inner_text("body")
-        pct_m = re.search(r'([+\-]\d+\.\d+%)', text)
-        change_pct = pct_m.group(1) if pct_m else "N/A"
+        # ★ [수정] 등락률: JS evaluate로 직접 추출 (inner_text regex 대비 안정적)
+        change_pct = await page.evaluate("""
+            () => {
+                const text = document.body ? document.body.innerText : '';
+
+                // 1순위: (+0.67%) 괄호 형태
+                const m1 = text.match(/\\(\\s*([+\\-]\\d+\\.?\\d*\\s*%)\\s*\\)/);
+                if (m1) {
+                    const v = m1[1].replace(/\\s/g, '');
+                    if (!['0%','+0%','-0%','+0.00%','0.00%'].includes(v)) return v;
+                }
+
+                // 2순위: 단독 +X.XX% 형태
+                const m2 = text.match(/([+\\-]\\d+\\.\\d+%)/);
+                if (m2) {
+                    const v = m2[1];
+                    if (!['0%','+0%','-0%','+0.00%','0.00%'].includes(v)) return v;
+                }
+
+                // 3순위: ▲▼ 기호
+                const m3 = text.match(/[▲↑]\\s*(\\d+\\.?\\d*%)/);
+                if (m3) return '+' + m3[1];
+                const m4 = text.match(/[▼↓]\\s*(\\d+\\.?\\d*%)/);
+                if (m4) return '-' + m4[1];
+
+                return 'N/A';
+            }
+        """)
 
         print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
 
@@ -564,11 +586,10 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
 
 def _scrape_nim_api(target: dict) -> dict:
-    """SHFE 공식 결산가 API로 니켈 주계약 가격 수집 (Playwright 불사용)."""
+    """SHFE 공식 결산가 API로 니켈 주계약 가격 수집."""
     display = f"{target['exchange']}·{target['ticker']}"
     base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
-    # 1차: Sina
     price, change_pct = _fetch_sina_price(target["sina_code"])
     if price:
         print(f"  Sina OK {display}: {price:,}")
@@ -576,7 +597,6 @@ def _scrape_nim_api(target: dict) -> dict:
                 "latest": price, "latest_vat_excl": round(price / VAT_RATE),
                 "change_pct": change_pct, "prev_close": None, "status": "OK"}
 
-    # 2차: SHFE 공식 API
     print(f"  Sina 실패 → SHFE API {display}")
     price, change_pct = _fetch_exchange_settlement(target)
     if price:
@@ -587,10 +607,10 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
-def _fetch_smm_articles(max_fetch: int = 8) -> list:
+# ★ [수정] cutoff 파라미터 추가 → 오래된 SMM 기사 필터
+def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None) -> list:
     """news.metal.com 직접 스크래핑으로 최신 SMM 기사 수집 (requests).
-    목록 페이지 → 기사 ID → 각 기사 og:title/description 파싱.
-    날짜 필터 없이 목록 최신순 기사를 그대로 사용.
+    cutoff 이전 기사는 제외.
     """
     SMM_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     SMM_KEYWORDS = {
@@ -606,7 +626,7 @@ def _fetch_smm_articles(max_fetch: int = 8) -> list:
         if not ids:
             return []
         articles = []
-        fetched = 0
+        fetched  = 0
         for article_id in ids:
             if fetched >= max_fetch:
                 break
@@ -615,6 +635,21 @@ def _fetch_smm_articles(max_fetch: int = 8) -> list:
                 r2  = requests.get(url, timeout=10, headers=SMM_HEADERS)
                 if r2.status_code != 200:
                     continue
+
+                # ★ [추가] 날짜 파싱 (og:article:published_time 또는 datePublished)
+                m_date = (
+                    re.search(r'property="article:published_time"\s+content="([^"]+)"', r2.text) or
+                    re.search(r'content="([^"]+)"\s+property="article:published_time"', r2.text) or
+                    re.search(r'"datePublished"\s*:\s*"([^"]+)"', r2.text) or
+                    re.search(r'"publishedAt"\s*:\s*"([^"]+)"', r2.text)
+                )
+                pub_date = parse_date(m_date.group(1)) if m_date else None
+
+                # ★ [추가] cutoff 필터: 어제 자정 이전 기사 제외
+                if cutoff and pub_date and pub_date < cutoff:
+                    print(f"  SMM 날짜 제외: {pub_date.strftime('%Y-%m-%d')} {url[-20:]}")
+                    continue
+
                 m_t = (re.search(r'property="og:title"\s+content="([^"]+)"', r2.text) or
                        re.search(r'content="([^"]+)"\s+property="og:title"', r2.text))
                 if not m_t:
@@ -633,7 +668,8 @@ def _fetch_smm_articles(max_fetch: int = 8) -> list:
                     "snippet":  snippet,
                     "source":   "SMM Metal",
                     "priority": False,
-                    "pub_date": None,
+                    "pub_date": pub_date,
+                    "pub":      pub_date.strftime("%Y-%m-%d") if pub_date else "",
                     "lang":     "en",
                 })
                 fetched += 1
@@ -648,10 +684,7 @@ def _fetch_smm_articles(max_fetch: int = 8) -> list:
 
 
 def _fetch_westmetall_ni3m() -> dict:
-    """westmetall.com에서 LME 니켈 Cash + 3M Official 동시 수집 (requests).
-    T-1/T-2 두 행 파싱 → 등락률 계산. 리전에 따라 TCP 차단 가능 → {} 반환.
-    Returns: {cash, cash_pct, m3, m3_pct, date}
-    """
+    """westmetall.com에서 LME 니켈 Cash + 3M Official 동시 수집."""
     try:
         url  = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
         resp = requests.get(url, timeout=12,
@@ -671,9 +704,9 @@ def _fetch_westmetall_ni3m() -> dict:
 
         def p(s): return float(s.replace(",", ""))
 
-        date_t1  = rows[0][0].strip()
-        cash_t1  = p(rows[0][1]);  cash_t2 = p(rows[1][1])
-        m3_t1    = p(rows[0][2]);  m3_t2   = p(rows[1][2])
+        date_t1 = rows[0][0].strip()
+        cash_t1 = p(rows[0][1]);  cash_t2 = p(rows[1][1])
+        m3_t1   = p(rows[0][2]);  m3_t2   = p(rows[1][2])
 
         if not (10_000 < cash_t1 < 30_000 and 10_000 < m3_t1 < 30_000):
             return {}
@@ -693,17 +726,11 @@ def _fetch_westmetall_ni3m() -> dict:
 
 
 async def _scrape_metalradar_ni3m(page) -> dict:
-    """LME 니켈 3M Official 수집.
-    1순위: westmetall.com (requests, Cash+3M 테이블, T-1/T-2 등락률 계산 가능)
-    2순위: metalradar.com (Playwright, Ask 가격만, pct=N/A)
-    Returns: {m3, m3_pct, date}
-    """
-    # ── 1순위: westmetall (requests) ────────────────────────────────────
+    """LME 니켈 3M Official 수집. 1순위 westmetall, 2순위 metalradar."""
     result = _fetch_westmetall_ni3m()
     if result:
         return result
 
-    # ── 2순위: metalradar (Playwright) ──────────────────────────────────
     print("  westmetall 실패 → metalradar.com 시도...")
     try:
         await page.goto(
@@ -727,10 +754,7 @@ async def _scrape_metalradar_ni3m(page) -> dict:
 
 
 def _fetch_lme_nickel_kpi() -> dict:
-    """한국물가정보(kpi.or.kr)에서 LME 니켈 Cash Settlement 수집.
-    출처: LME 공식 T-1 결산가. EUC-KR 정적 HTML 테이블.
-    Returns: {cash, cash_pct, date} or {}
-    """
+    """한국물가정보(kpi.or.kr)에서 LME 니켈 Cash Settlement 수집."""
     try:
         r = requests.get(
             "https://www.kpi.or.kr/www/contents/lme.asp?CFG_CD=con_09",
@@ -781,19 +805,17 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     spot_results, futures_results = [], []
     print("\n[SMM·LME 시세 수집]")
 
-    # ── LME 니켈: westmetall 먼저 (Cash+3M 동시), 실패 시 kpi.or.kr ────────
     print("  LME 니켈 수집 중...", end=" ", flush=True)
-    wm = _fetch_westmetall_ni3m()       # {cash, cash_pct, m3, m3_pct, date} or {}
+    wm = _fetch_westmetall_ni3m()
     if wm:
-        lme_ni = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
-        ni3m_prefetch = wm              # Cash+3M 동시 확보
+        lme_ni       = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
+        ni3m_prefetch = wm
         print(f"OK (westmetall) ${wm['cash']:,.0f} ({wm['cash_pct']})")
     else:
-        lme_ni = _fetch_lme_nickel_kpi()
+        lme_ni        = _fetch_lme_nickel_kpi()
         ni3m_prefetch = None
         print(f"OK (kpi) ${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "W 실패")
 
-    # ── Playwright 브라우저 (SMM 현물 + GFEX 선물) ──────────────────────────
     CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
     BROWSER_UA    = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -805,14 +827,12 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
         ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
         page    = await ctx.new_page()
 
-        # ── 현물: SMM (www-old.metal.com) ───────────────────────────────────
         for t in SPOT_TARGETS:
             print(f"  현물: {t['name']} ...", end=" ", flush=True)
             r = await _scrape_spot(page, t)
             spot_results.append(r)
             print("OK" if r["status"] == "OK" else f"W {r['status']}")
 
-            # 코발트 직후에 LME 니켈 삽입
             if t["name"] == "황산코발트":
                 if lme_ni:
                     ni_entry = {
@@ -840,8 +860,6 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
 
             await asyncio.sleep(2)
 
-        # ── 선물: GFEX (Playwright) ──────────────────────────────────────────
-        # westmetall에서 이미 3M을 가져왔으면 재수집 불필요
         if ni3m_prefetch:
             ni3m = ni3m_prefetch
             print(f"  LME 3M: ${ni3m['m3']:,.0f} ({ni3m['m3_pct']}) ← westmetall")
@@ -857,7 +875,6 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                 r = await _scrape_lcm_playwright(page, t)
                 futures_results.append(r)
                 print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
-                # GFEX 종료 후 browser 재시작
                 try:
                     await asyncio.wait_for(browser.close(), timeout=8.0)
                 except (asyncio.TimeoutError, Exception):
@@ -866,7 +883,6 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                 ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
                 page    = await ctx.new_page()
             elif t.get("method") == "metalradar":
-                # metalradar.com에서 수집한 ni3m 재사용
                 if ni3m:
                     r = {
                         "name":            t["name"],
@@ -913,11 +929,10 @@ def compute_spreads(price_data: dict) -> dict:
             "structure": "백워데이션" if diff > 0 else "콘탱고",
         }
 
-    # LME 니켈: Cash(현물) vs 3M(선물) — 모두 USD 기준
     ni_data   = futures_map.get("LME", {})
     ni_spot_r = spot_map.get("니켈", {})
-    ni_s      = ni_spot_r.get("usd_excl")   # LME Cash (USD/t)
-    ni_f      = ni_data.get("latest")        # LME 3M (USD/t)
+    ni_s      = ni_spot_r.get("usd_excl")
+    ni_f      = ni_data.get("latest")
     if ni_s and ni_f:
         diff = ni_s - ni_f
         spreads["니켈"] = {
@@ -976,8 +991,14 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
 # RSS 수집
 # ============================================================
 def collect_rss():
-    now        = datetime.utcnow()
-    cutoff_48h = now - timedelta(hours=48)
+    now    = datetime.utcnow()
+
+    # ★ [수정] cutoff: 48h 고정 → KST 어제 자정 기준
+    # 오늘이 5/18 KST이면 → 5/17 00:00 KST = 5/16 15:00 UTC 이후 기사만 허용
+    cutoff = get_cutoff_utc()
+    cutoff_str = (cutoff + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M KST")
+    print(f"  [날짜 필터] {cutoff_str} 이후 기사만 수집")
+
     raw  = []
     seen = set()
 
@@ -985,7 +1006,7 @@ def collect_rss():
         is_priority = item.get("priority", False)
 
         try:
-            q   = item["q"] + " when:3d"
+            q   = item["q"] + " when:2d"   # ★ when:3d → when:2d (구글 쿼리도 단축)
             url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
                    f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
                    f"&cb={int(now.timestamp())}")
@@ -994,9 +1015,7 @@ def collect_rss():
                 continue
             root = ET.fromstring(resp.content)
 
-            entries = root.findall(".//item")
-
-            for entry in entries:
+            for entry in root.findall(".//item"):
                 title   = decode_entities((entry.findtext("title") or "").strip())
                 link    = (entry.findtext("link") or "").strip()
                 link    = extract_real_url(link)
@@ -1011,7 +1030,9 @@ def collect_rss():
                     continue
 
                 pub_date = parse_date(pub_str)
-                if pub_date and pub_date < cutoff_48h:
+
+                # ★ [수정] cutoff 기준 필터 (이전: 48h, 현재: KST 어제 자정)
+                if pub_date and pub_date < cutoff:
                     continue
 
                 if "metal.com" in link.lower():
@@ -1033,6 +1054,12 @@ def collect_rss():
                     continue
                 if source != "SMM Metal":
                     if not any(w in lt for w in WHITELIST):
+                        continue
+
+                # ★ [추가] 인도네시아어 기사: 니켈 제련/시황 strict 필터
+                # (WHITELIST "nikel" 통과만으론 일반 광업기사 포함 위험)
+                if item.get("lang") == "id":
+                    if not any(k in lt for k in _ID_NICKEL_STRICT):
                         continue
 
                 seen.add(link)
@@ -1071,8 +1098,8 @@ def collect_rss():
         if not is_dup:
             deduped.append(a)
 
-    # ── SMM 직접 스크래핑 (news.metal.com) ─────────────────────────────────
-    smm_direct = _fetch_smm_articles()
+    # ★ [수정] SMM 직접 수집에 cutoff 전달
+    smm_direct = _fetch_smm_articles(cutoff=cutoff)
     for a in smm_direct:
         if not any(a["link"] == x.get("link") for x in deduped):
             deduped.append(a)
@@ -1099,16 +1126,9 @@ def fetch_body(real_url):
     return ""
 
 async def get_real_url(page, cbm_url):
-    """
-    Google News CBMi URL → 실제 기사 URL (Playwright).
-    ?oc=5 → &hl=en-US... → 실제 URL 두 단계 redirect 처리.
-    page.goto interrupt 예외는 정상 흐름이므로 무시하고 wait_for_url로 계속.
-    """
     try:
         await page.goto(cbm_url, wait_until="commit", timeout=15000)
     except Exception:
-        # Google이 ?oc=5 → &hl=en-US... 로 redirect 시 Playwright가
-        # "interrupted by another navigation" 예외를 던짐 → 무시하고 계속
         pass
 
     try:
@@ -1211,7 +1231,6 @@ async def enrich_articles(articles):
 
             print(f"\n본문결과: 성공{body_success}건 / 스니펫{body_snippet}건")
         finally:
-            # ★ 수정: try-finally로 예외 발생 시에도 browser 반드시 종료
             if browser:
                 await browser.close()
 
@@ -1272,6 +1291,12 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 - 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
 - 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사
 
+★ [유사 기사 통합 규칙 — 필수 준수]
+- 같은 이슈·사건·정책을 다룬 기사가 2건 이상인 경우:
+  · 정보가 가장 풍부한 1건만 articles에 포함하고, summary에서 "○○·△△ 등 복수 매체 보도" 방식으로 통합 언급.
+  · 단, 한국어 기사와 영어 기사처럼 언어/관점이 명확히 다른 경우 각 1건씩 허용.
+  · 예: 재생원료 인증제 관련 4개 한국어 기사 → 1건으로 통합 (가장 상세한 기사 선택).
+
 [요약기준] 3문장이내. 기관명.기업명.금액.수치.날짜 필수. 추상적요약금지.
 계획!=실행, MOU!=계약, 검토!=확정.
 
@@ -1317,7 +1342,6 @@ def _pct_color(pct: str) -> str:
     return "#c0392b" if "+" in pct else "#2471a3"
 
 def _source_badge(source: str) -> str:
-    """출처 소형 배지 (SMM / LME)"""
     colors = {"LME": ("#dbeafe", "#1d4ed8"), "SMM": ("#f0fdf4", "#15803d")}
     bg, fg = colors.get(source, ("#f1f5f9", "#64748b"))
     return (
@@ -1330,7 +1354,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     today   = datetime.now().strftime("%Y.%m.%d")
     spreads = compute_spreads(price_data)
 
-    # ── 스프레드 배지 ────────────────────────────────────────────
     spread_badges = ""
     for k, label in [("탄산리튬", "LC"), ("니켈", "Ni")]:
         if k in spreads:
@@ -1343,7 +1366,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                 f'{label} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
             )
 
-    # ── 현물 행 ─────────────────────────────────────────────────
     spot_rows = ""
     for r in price_data["spot"]:
         ok      = r.get("status") == "OK"
@@ -1352,7 +1374,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         pct     = r.get("change_pct", "N/A") if ok else "N/A"
         delayed = r.get("delayed", False)
 
-        # 품목 컬럼 배지
         badges = _source_badge(src)
         if name == "황산코발트":
             badges += ('<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
@@ -1363,7 +1384,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                        'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
                        'margin-left:3px;vertical-align:middle;">T-1</span>')
 
-        # 단가 컬럼 (USD primary, CNY secondary)
         if ok:
             usd_str = _fmt(r.get("usd_excl"), "$")
             cny_str = _fmt(r.get("cny_excl"), "CNY")
@@ -1374,7 +1394,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         else:
             price_cell = '<span style="color:#aaaaaa;">—</span>'
 
-        # 추가정보 컬럼 (코발트만 Co금속환산, 나머지 —)
         if ok and name == "황산코발트" and r.get("usd_metal"):
             extra_cell = (
                 f'<b style="font-size:12px;">{_fmt(r.get("usd_metal"), "$")}</b>'
@@ -1385,9 +1404,8 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         else:
             extra_cell = '<span style="color:#d1d5db;">—</span>'
 
-        name_en = r.get("name_en", "")
-        # 탄산리튬 label: TG/BG prefix
         label = name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
+        name_en = r.get("name_en", "")
 
         spot_rows += f"""
         <tr>
@@ -1406,7 +1424,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           </td>
         </tr>"""
 
-    # ── 선물 행 ─────────────────────────────────────────────────
     fut_rows = ""
     for r in price_data["futures"]:
         ok      = r.get("status") == "OK"
@@ -1417,17 +1434,14 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         ticker  = r.get("ticker", "")
         label   = r.get("name", "").replace(" 선물", "")
 
-        # 품목 배지
         f_badges = ""
         if delayed:
             f_badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
                          'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
                          'margin-left:4px;vertical-align:middle;">T-1</span>')
 
-        # 단가 컬럼
         if ok:
             if is_lme:
-                # LME: USD 직접 표시
                 usd = r.get("latest")
                 cny = r.get("latest_vat_excl")
                 price_f = (
@@ -1435,7 +1449,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                     f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(cny, "CNY")}</span>'
                 )
             else:
-                # GFEX: CNY 기준 (VAT제외)
                 ve  = r.get("latest_vat_excl")
                 ue  = round(ve / usd_cny) if ve else None
                 price_f = (
@@ -1445,7 +1458,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         else:
             price_f = '<span style="color:#aaaaaa;">—</span>'
 
-        # 기준가 컬럼
         if ok:
             if is_lme:
                 ref = '<span style="font-size:11px;color:#94a3b8;">LME Official</span>'
@@ -1792,4 +1804,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
