@@ -38,7 +38,6 @@ SPOT_TARGETS = [
      "url": "https://www-old.metal.com/Lithium/201102250059"},
 ]
 
-# 선물: Eastmoney 주연(主連) 페이지 — M계약 탐색 불필요, 항상 최근월 자동 롤링
 FUTURES_EM = [
     {
         "name":      "탄산리튬 선물",
@@ -52,7 +51,7 @@ FUTURES_EM = [
         "name":      "니켈 선물",
         "exchange":  "LME",
         "ticker":    "LME·3M",
-        "method":    "metalradar",   # metalradar.com Playwright → LME 3M Official Ask (=lme.com 공식)
+        "method":    "metalradar",
     },
 ]
 
@@ -122,7 +121,7 @@ QUERIES = [
      "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
      "lang": "en", "gl": "US", "ceid": "US:en"},
-    # ★ 인도네시아어: 니켈 제련/시황 전용 쿼리 (tambang 단독 제거)
+    # 인도네시아어: 니켈 제련·시황 전용 (tambang 단독 쿼리 제거)
     {"q": '("nikel" OR "HPAL" OR "RKEF") ("smelter" OR "hilirisasi nikel" OR "ferronickel" OR "nickel matte" OR "pemurnian")',
      "lang": "id", "gl": "ID", "ceid": "ID:id"},
     {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
@@ -262,15 +261,14 @@ WHITELIST = [
     "albemarle", "sqm", "ganfeng", "tianqi",
     "pilbara", "liontown", "arcadium", "sigma lithium",
     "circular economy", "생산자책임",
-    # 인도네시아어: 니켈 제련 특화 키워드 (tambang 단독은 WHITELIST에서 제거 → 쿼리 레벨에서 필터)
+    # 인도네시아어: 니켈 제련 특화
     "nikel", "rkef", "hpal", "ferronickel", "hilirisasi",
     "akkumulátor", "akkuhulladék",
     "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
 ]
 
-# ★ [추가] 인도네시아어 기사 니켈 제련/시황 strict 필터
-# WHITELIST의 "nikel" 하나만으론 일반 광업기사가 통과될 수 있어, 더 구체적인 키워드 필수
+# 인도네시아어 기사 strict 필터 (WHITELIST "nikel" 단독 통과 방지)
 _ID_NICKEL_STRICT = [
     "nikel", "rkef", "hpal", "ferronickel", "nickel matte",
     "hilirisasi nikel", "pemurnian nikel", "smelter nikel",
@@ -308,17 +306,14 @@ def extract_real_url(url):
             return urllib.parse.unquote(match.group(1))
     return url
 
-# ★ [추가] KST 어제 자정 기준 cutoff 계산 (UTC 반환)
 def get_cutoff_utc() -> datetime:
-    """KST 기준 '어제 00:00' = UTC 기준 '어제 15:00'.
-    오늘이 5월 18일 KST이면 → 5월 17일 00:00 KST = 5월 16일 15:00 UTC.
+    """KST 기준 '어제 00:00' → UTC 변환.
+    오늘이 5/19 KST → 5/18 00:00 KST = 5/17 15:00 UTC.
     이 시각 이전 기사는 모두 제외.
     """
-    kst_offset = timedelta(hours=9)
-    now_kst    = datetime.utcnow() + kst_offset
-    # KST 기준 어제 자정
+    kst_offset    = timedelta(hours=9)
+    now_kst       = datetime.utcnow() + kst_offset
     yesterday_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    # UTC 변환
     return yesterday_kst - kst_offset
 
 # ============================================================
@@ -348,7 +343,7 @@ async def _scrape_spot(page, target: dict) -> dict:
         cny_list = re.findall(
             r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*yuan/t(?:onne)?", text)
 
-        all_pcts = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
+        all_pcts   = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
         change_pct = next((p for p in all_pcts if p != "0%"), "N/A")
 
         date_m = re.search(
@@ -358,8 +353,8 @@ async def _scrape_spot(page, target: dict) -> dict:
         cny_incl = float(cny_list[0].replace(",", "")) if cny_list else None
         cny_excl = round(cny_incl / VAT_RATE) if cny_incl else None
 
-        mc = target.get("metal_content")
-        ml = target.get("metal_label")
+        mc        = target.get("metal_content")
+        ml        = target.get("metal_label")
         usd_metal = round(usd_excl / mc) if (usd_excl and mc) else None
         cny_metal = round(cny_excl / mc) if (cny_excl and mc) else None
 
@@ -379,14 +374,14 @@ async def _scrape_spot(page, target: dict) -> dict:
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
 
+
 def _fetch_sina_price(sina_code: str) -> tuple:
-    """Sina Finance hq API로 선물 주연 최신가 수집."""
     try:
         resp = requests.get(
             f"https://hq.sinajs.cn/list={sina_code.lower()}",
             timeout=8,
             headers={
-                "Referer": "https://finance.sina.com.cn/",
+                "Referer":    "https://finance.sina.com.cn/",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
         )
@@ -429,7 +424,6 @@ def _fetch_sina_price(sina_code: str) -> tuple:
 
 
 def _fetch_exchange_settlement(target: dict) -> tuple:
-    """거래소 공식 당일 결산가 API 수집."""
     today    = datetime.now().strftime("%Y%m%d")
     exchange = target["exchange"]
 
@@ -445,7 +439,7 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
                              "User-Agent": "Mozilla/5.0"})
                 if resp.status_code != 200:
                     continue
-                data = resp.json()
+                data      = resp.json()
                 contracts = [
                     x for x in data.get("o_curinstrument", [])
                     if str(x.get("PRODUCTID", "")).strip().lower() == "ni"
@@ -468,7 +462,6 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
         gfex_urls = [
             f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
             f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
-            f"https://www.gfex.com.cn/gfex/cjsj/historysettlementprice_list.shtml?variety=lc&trade_date={today}",
         ]
         for url in gfex_urls:
             try:
@@ -511,9 +504,11 @@ def _fetch_exchange_settlement(target: dict) -> tuple:
 
 
 async def _scrape_lcm_playwright(page, target: dict) -> dict:
-    """www.metal.com/gfex Playwright로 탄산리튬 선물 주계약 가격 수집."""
+    """www.metal.com/gfex — GFEX 탄산리튬 선물 주계약 수집.
+    [PATCH] pct 추출: 4단계 fallback, 부호 없는 퍼센트도 변동폭 부호로 추론.
+    """
     display = f"{target['exchange']}·{target['ticker']}"
-    base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
+    base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
     try:
         await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
@@ -524,7 +519,7 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
         except Exception:
             pass
 
-        # ── 가격 추출 (JS evaluate) ──────────────────────────────
+        # ── 가격 추출 ───────────────────────────────────────────
         price = await page.evaluate("""
             () => {
                 const text = (document.body ? document.body.innerText : '')
@@ -538,30 +533,36 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
             }
         """)
 
-        # ★ [수정] 등락률: JS evaluate로 직접 추출 (inner_text regex 대비 안정적)
+        # ── 등락률 추출 — 4단계 fallback ────────────────────────
+        # [PATCH] 부호 없는 퍼센트도 앞 변동폭 부호로 방향 추론
         change_pct = await page.evaluate("""
             () => {
                 const text = document.body ? document.body.innerText : '';
 
-                // 1순위: (+0.67%) 괄호 형태
-                const m1 = text.match(/\\(\\s*([+\\-]\\d+\\.?\\d*\\s*%)\\s*\\)/);
-                if (m1) {
-                    const v = m1[1].replace(/\\s/g, '');
-                    if (!['0%','+0%','-0%','+0.00%','0.00%'].includes(v)) return v;
+                // 1순위: "+1,280 (+0.67%)" / "+1,280 (0.67%)" 콤보
+                const combo = text.match(/([+\\-][\\d,]+)\\s*\\(\\s*([+\\-]?\\d+\\.?\\d*)\\s*%\\s*\\)/);
+                if (combo) {
+                    const sign   = combo[1].trim().startsWith('-') ? '-' : '+';
+                    const digits = combo[2].replace(/[+\\-]/, '').trim();
+                    if (parseFloat(digits) !== 0) return sign + digits + '%';
                 }
 
-                // 2순위: 단독 +X.XX% 형태
-                const m2 = text.match(/([+\\-]\\d+\\.\\d+%)/);
-                if (m2) {
-                    const v = m2[1];
-                    if (!['0%','+0%','-0%','+0.00%','0.00%'].includes(v)) return v;
+                // 2순위: "(+0.67%)" 부호 포함 괄호
+                const paren = text.match(/\\(\\s*([+\\-]\\d+\\.?\\d*)\\s*%\\s*\\)/);
+                if (paren) {
+                    const v = paren[1].trim();
+                    if (parseFloat(v) !== 0) return v + '%';
                 }
 
-                // 3순위: ▲▼ 기호
-                const m3 = text.match(/[▲↑]\\s*(\\d+\\.?\\d*%)/);
-                if (m3) return '+' + m3[1];
-                const m4 = text.match(/[▼↓]\\s*(\\d+\\.?\\d*%)/);
-                if (m4) return '-' + m4[1];
+                // 3순위: "+0.67%" 단독 (소수점 필수)
+                const direct = text.match(/([+\\-]\\d+\\.\\d+%)/);
+                if (direct && parseFloat(direct[1]) !== 0) return direct[1];
+
+                // 4순위: ▲▼ 화살표 기호
+                const up   = text.match(/[▲↑⬆]\\s*(\\d+\\.?\\d*)%/);
+                if (up)   return '+' + up[1]   + '%';
+                const down = text.match(/[▼↓⬇]\\s*(\\d+\\.?\\d*)%/);
+                if (down) return '-' + down[1] + '%';
 
                 return 'N/A';
             }
@@ -586,9 +587,8 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
 
 def _scrape_nim_api(target: dict) -> dict:
-    """SHFE 공식 결산가 API로 니켈 주계약 가격 수집."""
     display = f"{target['exchange']}·{target['ticker']}"
-    base = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
+    base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
 
     price, change_pct = _fetch_sina_price(target["sina_code"])
     if price:
@@ -607,26 +607,43 @@ def _scrape_nim_api(target: dict) -> dict:
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
-# ★ [수정] cutoff 파라미터 추가 → 오래된 SMM 기사 필터
-def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None) -> list:
-    """news.metal.com 직접 스크래핑으로 최신 SMM 기사 수집 (requests).
-    cutoff 이전 기사는 제외.
+def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None,
+                        existing_titles: list = None) -> list:
+    """news.metal.com 직접 스크래핑.
+    [PATCH]
+    - 날짜 파싱 3단계 fallback
+    - pub_date=None → 무조건 제외 (오래된 기사 반복 방지 핵심)
+    - existing_titles: RSS dedup 후 기사 목록 → title 중복 체크
     """
     SMM_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     SMM_KEYWORDS = {
         "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
         "cathode", "precursor", "lme", "sulfate", "hydroxide", "carbonate",
     }
+    existing_titles = existing_titles or []
+
+    def _title_dup(new_title: str) -> bool:
+        words_new = {w for w in re.sub(r'[^\w\s]', ' ', new_title).split() if len(w) >= 3}
+        for t in existing_titles:
+            words_t = {w for w in re.sub(r'[^\w\s]', ' ', t).split() if len(w) >= 3}
+            if len(words_new & words_t) >= 4:
+                return True
+        return False
+
     try:
         r = requests.get("https://news.metal.com/en/", timeout=12, headers=SMM_HEADERS)
         if r.status_code != 200:
             print(f"  SMM 직접: 목록 {r.status_code}")
             return []
-        ids = list(dict.fromkeys(re.findall(r'/newscontent/(\d{8,})', r.text)))[:max_fetch * 2]
+        ids = list(dict.fromkeys(re.findall(r'/newscontent/(\d{8,})', r.text)))[:max_fetch * 3]
         if not ids:
             return []
-        articles = []
-        fetched  = 0
+
+        articles      = []
+        fetched       = 0
+        skipped_date  = 0
+        skipped_dup   = 0
+
         for article_id in ids:
             if fetched >= max_fetch:
                 break
@@ -636,32 +653,68 @@ def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None) -> list:
                 if r2.status_code != 200:
                     continue
 
-                # ★ [추가] 날짜 파싱 (og:article:published_time 또는 datePublished)
+                # ── 날짜 파싱 3단계 ──────────────────────────────
+                pub_date = None
+
+                # 1단계: article:published_time 또는 datePublished 메타태그
                 m_date = (
                     re.search(r'property="article:published_time"\s+content="([^"]+)"', r2.text) or
                     re.search(r'content="([^"]+)"\s+property="article:published_time"', r2.text) or
                     re.search(r'"datePublished"\s*:\s*"([^"]+)"', r2.text) or
                     re.search(r'"publishedAt"\s*:\s*"([^"]+)"', r2.text)
                 )
-                pub_date = parse_date(m_date.group(1)) if m_date else None
+                if m_date:
+                    pub_date = parse_date(m_date.group(1))
 
-                # ★ [추가] cutoff 필터: 어제 자정 이전 기사 제외
-                if cutoff and pub_date and pub_date < cutoff:
-                    print(f"  SMM 날짜 제외: {pub_date.strftime('%Y-%m-%d')} {url[-20:]}")
+                # 2단계: ISO datetime 패턴 검색
+                if not pub_date:
+                    iso_m = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', r2.text[:8000])
+                    if iso_m:
+                        pub_date = parse_date(iso_m.group(1))
+
+                # 3단계: "May 18, 2026" 또는 "2026-05-18" 텍스트 패턴
+                if not pub_date:
+                    date_text_m = re.search(
+                        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}'
+                        r'|\b\d{4}-\d{2}-\d{2}\b',
+                        r2.text[:8000]
+                    )
+                    if date_text_m:
+                        pub_date = parse_date(date_text_m.group(0))
+
+                # ── pub_date 확인 불가 → 제외 ────────────────────
+                if pub_date is None:
+                    print(f"  SMM 날짜불명 제외: {url[-25:]}")
+                    skipped_date += 1
                     continue
 
+                # ── cutoff 필터 ──────────────────────────────────
+                if cutoff and pub_date < cutoff:
+                    print(f"  SMM 날짜제외: {pub_date.strftime('%Y-%m-%d')} {url[-25:]}")
+                    skipped_date += 1
+                    continue
+
+                # ── 제목 파싱 ────────────────────────────────────
                 m_t = (re.search(r'property="og:title"\s+content="([^"]+)"', r2.text) or
                        re.search(r'content="([^"]+)"\s+property="og:title"', r2.text))
                 if not m_t:
                     continue
                 title = html_lib.unescape(m_t.group(1))
                 title = re.sub(r'\s*[-|]\s*Shanghai Metals Market.*$', '', title).strip()
-                lt = title.lower()
-                if not any(k in lt for k in SMM_KEYWORDS):
+
+                if not any(k in title.lower() for k in SMM_KEYWORDS):
                     continue
+
+                # ── title 중복 체크 (RSS dedup 기사와 비교) ───────
+                if _title_dup(title):
+                    print(f"  SMM title중복 제외: {title[:40]}")
+                    skipped_dup += 1
+                    continue
+
                 m_d = (re.search(r'property="og:description"\s+content="([^"]+)"', r2.text) or
                        re.search(r'content="([^"]+)"\s+property="og:description"', r2.text))
                 snippet = html_lib.unescape(m_d.group(1))[:200] if m_d else ""
+
                 articles.append({
                     "title":    title,
                     "link":     url,
@@ -669,22 +722,25 @@ def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None) -> list:
                     "source":   "SMM Metal",
                     "priority": False,
                     "pub_date": pub_date,
-                    "pub":      pub_date.strftime("%Y-%m-%d") if pub_date else "",
+                    "pub":      pub_date.strftime("%Y-%m-%d"),
                     "lang":     "en",
                 })
+                existing_titles.append(title)
                 fetched += 1
                 time.sleep(0.3)
+
             except Exception:
                 continue
-        print(f"  SMM 직접: {len(articles)}건 (ID {ids[0]}~)")
+
+        print(f"  SMM 직접: {len(articles)}건 / 날짜제외:{skipped_date} / 중복:{skipped_dup}")
         return articles
+
     except Exception as e:
         print(f"  SMM 직접 오류: {e}")
         return []
 
 
 def _fetch_westmetall_ni3m() -> dict:
-    """westmetall.com에서 LME 니켈 Cash + 3M Official 동시 수집."""
     try:
         url  = "https://www.westmetall.com/en/markdaten.php?action=table&field=LME_Ni_cash"
         resp = requests.get(url, timeout=12,
@@ -704,9 +760,9 @@ def _fetch_westmetall_ni3m() -> dict:
 
         def p(s): return float(s.replace(",", ""))
 
-        date_t1 = rows[0][0].strip()
-        cash_t1 = p(rows[0][1]);  cash_t2 = p(rows[1][1])
-        m3_t1   = p(rows[0][2]);  m3_t2   = p(rows[1][2])
+        date_t1  = rows[0][0].strip()
+        cash_t1  = p(rows[0][1]);  cash_t2 = p(rows[1][1])
+        m3_t1    = p(rows[0][2]);  m3_t2   = p(rows[1][2])
 
         if not (10_000 < cash_t1 < 30_000 and 10_000 < m3_t1 < 30_000):
             return {}
@@ -726,7 +782,6 @@ def _fetch_westmetall_ni3m() -> dict:
 
 
 async def _scrape_metalradar_ni3m(page) -> dict:
-    """LME 니켈 3M Official 수집. 1순위 westmetall, 2순위 metalradar."""
     result = _fetch_westmetall_ni3m()
     if result:
         return result
@@ -754,16 +809,12 @@ async def _scrape_metalradar_ni3m(page) -> dict:
 
 
 def _fetch_lme_nickel_kpi() -> dict:
-    """한국물가정보(kpi.or.kr)에서 LME 니켈 Cash Settlement 수집."""
     try:
         r = requests.get(
             "https://www.kpi.or.kr/www/contents/lme.asp?CFG_CD=con_09",
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,*/*;q=0.8",
+                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept":          "text/html,*/*;q=0.8",
                 "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
             },
             timeout=10,
@@ -790,25 +841,21 @@ def _fetch_lme_nickel_kpi() -> dict:
             if len(nums) >= 2:
                 cash, cash_prev = nums[0], nums[1]
                 pct = (cash - cash_prev) / cash_prev * 100
-                return {
-                    "cash":     cash,
-                    "cash_pct": f"{pct:+.2f}%",
-                    "date":     datetime.now().strftime("%d. %b %Y"),
-                }
+                return {"cash": cash, "cash_pct": f"{pct:+.2f}%",
+                        "date": datetime.now().strftime("%d. %b %Y")}
     except Exception as e:
         print(f"  LME 니켈 오류 (kpi.or.kr): {e}")
     return {}
 
 
 async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
-    """현물(SMM) + LME 니켈(kpi.or.kr) + 선물(GFEX) 시세 수집."""
     spot_results, futures_results = [], []
     print("\n[SMM·LME 시세 수집]")
 
     print("  LME 니켈 수집 중...", end=" ", flush=True)
     wm = _fetch_westmetall_ni3m()
     if wm:
-        lme_ni       = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
+        lme_ni        = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
         ni3m_prefetch = wm
         print(f"OK (westmetall) ${wm['cash']:,.0f} ({wm['cash_pct']})")
     else:
@@ -915,7 +962,7 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
 def compute_spreads(price_data: dict) -> dict:
     spot_map    = {r["name"]: r for r in price_data["spot"]    if r["status"] == "OK"}
     futures_map = {r["exchange"]: r for r in price_data["futures"] if r["status"] == "OK"}
-    spreads = {}
+    spreads     = {}
 
     lc_data = futures_map.get("GFEX", {})
     lc_s    = spot_map.get("공업용 탄산리튬", {}).get("cny_excl")
@@ -948,7 +995,7 @@ def compute_spreads(price_data: dict) -> dict:
 def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> str:
     lines = [f"수집: {datetime.now().strftime('%H:%M')} KST | USD/CNY: {usd_cny:.2f}"]
 
-    lines.append("\n[현물 - 증치세제외 기준 (한국->중국 수출가)]")
+    lines.append("\n[현물 - 증치세제외 기준]")
     for r in price_data["spot"]:
         if r["status"] != "OK":
             continue
@@ -988,16 +1035,52 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
     return "\n".join(lines)
 
 # ============================================================
+# pre-clustering — collect_rss() 위에 위치
+# ============================================================
+def _pre_cluster_articles(articles: list) -> list:
+    """동일 이슈 기사 사전 클러스터링.
+    [PATCH] 같은 언어 내 제목 단어 5개 이상 겹치면 body가 더 긴 1건만 유지.
+    다른 언어끼리(한국어+영어 등)는 각각 독립 취급.
+    예: 재생원료 인증제 관련 한국어 기사 5건 → 1건으로 축소.
+    """
+    kept = []
+
+    for a in articles:
+        lang_a  = a.get("lang", "")
+        words_a = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
+        len_a   = len(a.get("body", "") or a.get("snippet", ""))
+
+        merged = False
+        for i, b in enumerate(kept):
+            if b.get("lang", "") != lang_a:
+                continue
+            words_b = {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}
+            if len(words_a & words_b) >= 5:
+                # body가 더 긴 쪽으로 교체
+                len_b = len(b.get("body", "") or b.get("snippet", ""))
+                if len_a > len_b:
+                    kept[i] = a
+                merged = True
+                break
+
+        if not merged:
+            kept.append(a)
+
+    removed = len(articles) - len(kept)
+    if removed > 0:
+        print(f"  pre-clustering: {removed}건 통합 → {len(kept)}건 유지")
+    return kept
+
+# ============================================================
 # RSS 수집
 # ============================================================
 def collect_rss():
     now    = datetime.utcnow()
 
-    # ★ [수정] cutoff: 48h 고정 → KST 어제 자정 기준
-    # 오늘이 5/18 KST이면 → 5/17 00:00 KST = 5/16 15:00 UTC 이후 기사만 허용
-    cutoff = get_cutoff_utc()
-    cutoff_str = (cutoff + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M KST")
-    print(f"  [날짜 필터] {cutoff_str} 이후 기사만 수집")
+    # KST 어제 자정 기준 cutoff (UTC)
+    cutoff     = get_cutoff_utc()
+    cutoff_kst = cutoff + timedelta(hours=9)
+    print(f"  [날짜 필터] {cutoff_kst.strftime('%Y-%m-%d %H:%M')} KST 이후 기사만 수집")
 
     raw  = []
     seen = set()
@@ -1006,7 +1089,7 @@ def collect_rss():
         is_priority = item.get("priority", False)
 
         try:
-            q   = item["q"] + " when:2d"   # ★ when:3d → when:2d (구글 쿼리도 단축)
+            q   = item["q"] + " when:2d"
             url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
                    f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
                    f"&cb={int(now.timestamp())}")
@@ -1016,13 +1099,13 @@ def collect_rss():
             root = ET.fromstring(resp.content)
 
             for entry in root.findall(".//item"):
-                title   = decode_entities((entry.findtext("title") or "").strip())
-                link    = (entry.findtext("link") or "").strip()
-                link    = extract_real_url(link)
-                pub_str = (entry.findtext("pubDate") or "").strip()
+                title     = decode_entities((entry.findtext("title") or "").strip())
+                link      = (entry.findtext("link") or "").strip()
+                link      = extract_real_url(link)
+                pub_str   = (entry.findtext("pubDate") or "").strip()
                 source_el = entry.find("source")
-                source  = source_el.text.strip() if source_el is not None else ""
-                snippet = decode_entities(
+                source    = source_el.text.strip() if source_el is not None else ""
+                snippet   = decode_entities(
                     re.sub(r'<[^>]+>', '', entry.findtext("description") or "")
                 )[:200]
 
@@ -1031,7 +1114,7 @@ def collect_rss():
 
                 pub_date = parse_date(pub_str)
 
-                # ★ [수정] cutoff 기준 필터 (이전: 48h, 현재: KST 어제 자정)
+                # KST 어제 자정 이전 기사 제외
                 if pub_date and pub_date < cutoff:
                     continue
 
@@ -1056,17 +1139,20 @@ def collect_rss():
                     if not any(w in lt for w in WHITELIST):
                         continue
 
-                # ★ [추가] 인도네시아어 기사: 니켈 제련/시황 strict 필터
-                # (WHITELIST "nikel" 통과만으론 일반 광업기사 포함 위험)
+                # 인도네시아어 strict 필터
                 if item.get("lang") == "id":
                     if not any(k in lt for k in _ID_NICKEL_STRICT):
                         continue
 
                 seen.add(link)
                 raw.append({
-                    "title": title, "link": link, "source": source,
-                    "pub": pub_str, "pub_date": pub_date,
-                    "lang": item.get("lang", "en"), "snippet": snippet,
+                    "title":    title,
+                    "link":     link,
+                    "source":   source,
+                    "pub":      pub_str,
+                    "pub_date": pub_date,
+                    "lang":     item.get("lang", "en"),
+                    "snippet":  snippet,
                     "priority": is_priority,
                 })
 
@@ -1098,15 +1184,19 @@ def collect_rss():
         if not is_dup:
             deduped.append(a)
 
-    # ★ [수정] SMM 직접 수집에 cutoff 전달
-    smm_direct = _fetch_smm_articles(cutoff=cutoff)
+    # SMM 직접 수집 — existing_titles 전달로 title dedup 적용
+    existing_titles_for_smm = [a["title"] for a in deduped]
+    smm_direct = _fetch_smm_articles(cutoff=cutoff, existing_titles=existing_titles_for_smm)
     for a in smm_direct:
         if not any(a["link"] == x.get("link") for x in deduped):
             deduped.append(a)
 
+    # pre-clustering: 동일 이슈 기사 Python 레벨 통합
+    deduped = _pre_cluster_articles(deduped)
+
     sc = sum(1 for a in deduped if "SMM" in a.get("source", ""))
     pc = sum(1 for a in deduped if a.get("priority"))
-    print(f"수집: {len(raw)}건 -> 중복제거: {len(deduped)}건 (SMM:{sc}건, 시황매체:{pc}건)")
+    print(f"수집: {len(raw)}건 -> 클러스터링후: {len(deduped)}건 (SMM:{sc}건, 시황매체:{pc}건)")
     return deduped
 
 # ============================================================
@@ -1240,8 +1330,7 @@ async def enrich_articles(articles):
 # Gemini 분석
 # ============================================================
 def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
-    today     = datetime.now().strftime("%Y년 %m월 %d일")
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y년 %m월 %d일")
 
     smm_articles     = [a for a in articles if "SMM" in a.get("source", "")][:2]
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
@@ -1259,9 +1348,9 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     gen_sec = "\n\n".join(fmt_article(i, a) for i, a in enumerate(general_articles))
 
     if price_data:
-        spreads     = compute_spreads(price_data)
-        price_str   = format_price_for_prompt(price_data, usd_cny, spreads)
-        price_sec   = f"\n[당일 SMM 시세]\n{price_str}\n"
+        spreads   = compute_spreads(price_data)
+        price_str = format_price_for_prompt(price_data, usd_cny, spreads)
+        price_sec = f"\n[당일 SMM 시세]\n{price_str}\n"
         price_guide = """
 [시사점 5개 작성 — 아래 구성 반드시 준수]
 ① 시세 종합 (1개만, 필수): 탄산리튬·니켈·코발트 스프레드를 하나로 묶어 원료 매입/제품 판매 전략 시사점. 구체적 수치 인용.
@@ -1285,22 +1374,21 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 {gen_sec}
 
 [필수 선별 규칙]
-- articles는 반드시 8건 이상 12건 이하로 선택. 4건·5건 등 부족한 경우 절대 금지.
+- articles는 반드시 8건 이상 12건 이하로 선택.
 - 위 뉴스 목록에서 최대한 많이 선택. 관련도 낮아도 배터리/소재/공급망이면 포함.
 - 성일하이텍 기사 반드시 포함.
 - 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
 - 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사
 
-★ [유사 기사 통합 규칙 — 필수 준수]
-- 같은 이슈·사건·정책을 다룬 기사가 2건 이상인 경우:
-  · 정보가 가장 풍부한 1건만 articles에 포함하고, summary에서 "○○·△△ 등 복수 매체 보도" 방식으로 통합 언급.
-  · 단, 한국어 기사와 영어 기사처럼 언어/관점이 명확히 다른 경우 각 1건씩 허용.
-  · 예: 재생원료 인증제 관련 4개 한국어 기사 → 1건으로 통합 (가장 상세한 기사 선택).
+★ [유사 기사 통합 규칙]
+- 동일 이슈 기사가 2건 이상이면 가장 정보가 풍부한 1건만 선택.
+  summary에서 "○○·△△ 등 복수 매체 보도" 방식으로 통합 언급.
+- 언어/관점이 다른 경우(한국어+영어)는 각 1건 허용.
 
-[요약기준] 3문장이내. 기관명.기업명.금액.수치.날짜 필수. 추상적요약금지.
-계획!=실행, MOU!=계약, 검토!=확정.
+[요약기준] 3문장이내. 기관명·기업명·금액·수치·날짜 필수. 추상적요약금지.
+계획≠실행, MOU≠계약, 검토≠확정.
 
-[트렌드3개] 한국/중국/미국EU 균형. 오늘기사 수치.정책명 직접인용.
+[트렌드3개] 한국/중국/미국EU 균형. 오늘 기사 수치·정책명 직접인용.
 {price_guide}
 
 JSON (articles 최소8건 필수):
@@ -1385,8 +1473,8 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                        'margin-left:3px;vertical-align:middle;">T-1</span>')
 
         if ok:
-            usd_str = _fmt(r.get("usd_excl"), "$")
-            cny_str = _fmt(r.get("cny_excl"), "CNY")
+            usd_str    = _fmt(r.get("usd_excl"), "$")
+            cny_str    = _fmt(r.get("cny_excl"), "CNY")
             price_cell = (
                 f'<b style="font-size:13px;">{usd_str}</b>'
                 f'<br><span style="color:#aaaaaa;font-size:11px;">{cny_str}</span>'
@@ -1404,7 +1492,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         else:
             extra_cell = '<span style="color:#d1d5db;">—</span>'
 
-        label = name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
+        label   = name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
         name_en = r.get("name_en", "")
 
         spot_rows += f"""
@@ -1427,7 +1515,6 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     fut_rows = ""
     for r in price_data["futures"]:
         ok      = r.get("status") == "OK"
-        src     = r.get("source", "")
         is_lme  = r.get("exchange") == "LME"
         pct     = r.get("change_pct", "N/A") if ok else "N/A"
         delayed = r.get("delayed", False)
@@ -1442,15 +1529,15 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
 
         if ok:
             if is_lme:
-                usd = r.get("latest")
-                cny = r.get("latest_vat_excl")
+                usd     = r.get("latest")
+                cny     = r.get("latest_vat_excl")
                 price_f = (
                     f'<b style="font-size:13px;">{_fmt(usd, "$")}</b>'
                     f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(cny, "CNY")}</span>'
                 )
             else:
-                ve  = r.get("latest_vat_excl")
-                ue  = round(ve / usd_cny) if ve else None
+                ve      = r.get("latest_vat_excl")
+                ue      = round(ve / usd_cny) if ve else None
                 price_f = (
                     f'<b style="font-size:13px;">{_fmt(ue, "$")}</b>'
                     f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(ve, "CNY")}</span>'
@@ -1509,14 +1596,10 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
              style="font-size:13px;background:#ffffff;border:1px solid #e2e8f0;border-collapse:collapse;">
         <thead>
           <tr bgcolor="#f8fafc" style="background:#f8fafc;">
-            <td style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              현물 (Spot) · 품목</td>
-            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">CNY/t 환산</span></td>
-            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              추가정보</td>
-            <td style="padding:10px 14px;text-align:center;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">
-              등락</td>
+            <td style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">현물 (Spot) · 품목</td>
+            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">CNY/t 환산</span></td>
+            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">추가정보</td>
+            <td style="padding:10px 14px;text-align:center;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
           </tr>
         </thead>
         <tbody>
@@ -1672,7 +1755,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
        style="max-width:680px;margin:0 auto;background-color:#ffffff;
               border:1px solid #e2e8f0;border-collapse:collapse;">
 
-  <!-- 헤더 -->
   <tr>
     <td bgcolor="#0f2744" style="background-color:#0f2744;padding:40px 30px;">
       <h1 style="color:#ffffff;font-size:24px;font-weight:700;margin:0 0 10px 0;
@@ -1686,7 +1768,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
 
   {price_rows}
 
-  <!-- SECTION 2 -->
   <tr>
     <td bgcolor="#1e293b"
         style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
@@ -1700,7 +1781,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     </td>
   </tr>
 
-  <!-- SECTION 3 -->
   <tr>
     <td bgcolor="#1e293b"
         style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
@@ -1714,7 +1794,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     </td>
   </tr>
 
-  <!-- SECTION 4 -->
   <tr>
     <td bgcolor="#1e293b"
         style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
@@ -1740,7 +1819,6 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
     </td>
   </tr>
 
-  <!-- 푸터 -->
   <tr>
     <td bgcolor="#0f2744"
         style="background-color:#0f2744;padding:30px;text-align:center;">
@@ -1804,3 +1882,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
