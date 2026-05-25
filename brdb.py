@@ -45,6 +45,7 @@ FUTURES_EM = [
         "url":       "https://www.metal.com/gfex",
         "ticker":    "LCM",
         "method":    "playwright",
+        "sina_code": "nf_LCM",
     },
     {
         "name":      "니켈 선물",
@@ -147,8 +148,7 @@ QUERIES = [
      "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십" OR "인수" OR "합작")',
      "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    # 헝가리어: akkumulátor 단독 제거(소비자 가전 오염), 복합어+법인 위치명으로 교체
-    {"q": '"SungEel" OR "Batonyterenye" OR "akkumulátor-újrahasznosítás" OR "akkumulátor visszagyűjtés" OR "akkuhulladék"',
+    {"q": '"SungEel" OR "Samsung SDI" OR "SK On" OR "akkuhulladék" OR "akkumulátor" OR "újrahasznosít"',
      "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
     {"q": '"news.metal.com" (nickel OR cobalt OR lithium OR "black mass" OR recycling)',
      "lang": "en", "gl": "US", "ceid": "US:en"},
@@ -184,10 +184,6 @@ NOISE_KEYWORDS = [
     "motorola", "samsung galaxy", "iphone", "ipad", "smartphone launch",
     "foldable phone", "razr", "pixel phone", "snapdragon",
     "launched in india", "goes on sale", "pre-order",
-    # ★ 추가: 스마트폰/태블릿/자동차 시승 노이즈
-    "oppo", "vivo", "realme", "honor phone",
-    "táblagép", "diákoknak", "tablet pc",
-    "试驾", "续航里程达成率", "驾驶体验",
 ]
 
 NOISE_SOURCES = [
@@ -198,10 +194,6 @@ NOISE_SOURCES = [
     "msn", "msn.com", "aol.com", "simplywall.st", "futunn.com", "judal.co.kr",
     "investingnews.com", "thebull.com.au", "marketsmojo.com",
     "switzer.com.au", "nai500.com", "kalkinemedia.com",
-    # ★ 추가: 투자분석·일반매체 오염 소스
-    "chartmill", "vozpopuli", "mixvale", "vietnam.vn",
-    "ad-hoc-news", "stocktitan",
-    "bitget", "belfasttelegraph", "technetbooks", "saudigazette", "techjuice",
 ]
 
 NOISE_URL_PATHS = ["/stock/", "/en/stock/", "/stocks/", "/share-price/", "/equity/"]
@@ -383,27 +375,94 @@ async def _scrape_spot(page, target: dict) -> dict:
         return {**base, "status": f"ERROR: {e}"}
 
 
+def _fetch_sina_price(sina_code: str) -> tuple:
+    try:
+        resp = requests.get(
+            f"https://hq.sinajs.cn/list={sina_code.lower()}",
+            timeout=8,
+            headers={
+                "Referer":    "https://finance.sina.com.cn/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+        )
+        if resp.status_code != 200:
+            print(f"  Sina [{sina_code}] HTTP {resp.status_code}")
+            return None, "N/A"
+
+        m = re.search(r'"([^"]*)"', resp.text)
+        if not m or len(m.group(1)) < 5:
+            print(f"  Sina [{sina_code}] 빈 응답: {resp.text[:80]}")
+            return None, "N/A"
+
+        parts = [p.strip() for p in m.group(1).split(',')]
+        print(f"  Sina [{sina_code}]: {parts[:9]}")
+
+        price = None
+        for p in parts[1:8]:
+            try:
+                v = float(p)
+                if 30000 <= v <= 600000:
+                    price = int(v)
+                    break
+            except Exception:
+                continue
+
+        change_pct = "N/A"
+        if price and len(parts) > 7:
+            try:
+                prev = float(parts[7])
+                if 30000 <= prev <= 600000:
+                    change_pct = f"{(price - prev) / prev * 100:+.2f}%"
+            except Exception:
+                pass
+
+        return price, change_pct
+
+    except Exception as e:
+        print(f"  Sina 오류 [{sina_code}]: {e}")
+        return None, "N/A"
 
 
 def _fetch_exchange_settlement(target: dict) -> tuple:
-    """GFEX 탄산리튬 결산가 API — 최근 거래일 롤백."""
+    today    = datetime.now().strftime("%Y%m%d")
     exchange = target["exchange"]
 
-    if exchange == "GFEX":
-        # 최근 거래일 롤백: 오늘 → 어제 → 그제 (주말·공휴일 대응, 최대 5일 탐색)
-        trade_dates = []
-        d = datetime.now()
-        for _ in range(7):
-            if d.weekday() < 5:  # 월~금
-                trade_dates.append(d.strftime("%Y%m%d"))
-            d -= timedelta(days=1)
-            if len(trade_dates) >= 3:
-                break
+    if exchange == "SHFE":
+        urls = [
+            f"https://www.shfe.com.cn/data/dailydata/kx/kx{today}.dat",
+            f"https://www.shfe.com.cn/data/dailydata/kx/kx{(datetime.now() - timedelta(days=1)).strftime('%Y%m%d')}.dat",
+        ]
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=10,
+                    headers={"Referer": "https://www.shfe.com.cn/",
+                             "User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    continue
+                data      = resp.json()
+                contracts = [
+                    x for x in data.get("o_curinstrument", [])
+                    if str(x.get("PRODUCTID", "")).strip().lower() == "ni"
+                    and float(x.get("SETTLEMENTPRICE") or 0) > 0
+                ]
+                if not contracts:
+                    continue
+                main   = max(contracts, key=lambda x: float(x.get("OPENINTEREST") or 0))
+                settle = int(float(main["SETTLEMENTPRICE"]))
+                prev   = float(main.get("PRESETTLEMENTPRICE") or 0)
+                pct    = f"{(settle-prev)/prev*100:+.2f}%" if prev else "N/A"
+                month  = str(main.get("DELIVERYMONTH", "")).strip()
+                print(f"  SHFE 결산 NI{month}: {settle:,} CNY/t ({pct})")
+                return settle, pct
+            except Exception as e:
+                print(f"  SHFE API 오류: {e}")
+        return None, "N/A"
 
-        gfex_urls = []
-        for td in trade_dates:
-            gfex_urls.append(f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={td}")
-            gfex_urls.append(f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={td}")
+    elif exchange == "GFEX":
+        gfex_urls = [
+            f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
+            f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={today}",
+        ]
         for url in gfex_urls:
             try:
                 resp = requests.get(url, timeout=10,
@@ -474,25 +533,41 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
             }
         """)
 
-        # ── 등락률: GFEX 결산가 API (SMM·LME와 동일 원리)
-        # 최근 거래일 롤백으로 주말/장중 모두 안정적으로 수집
-        _, change_pct = _fetch_exchange_settlement(target)
-        if change_pct == "N/A":
-            # API 실패 시 JS evaluate fallback
-            change_pct = await page.evaluate("""
-                () => {
-                    const text = document.body ? document.body.innerText : '';
-                    const combo = text.match(/([+\\-][\\d,]+)\\s*\\(\\s*([+\\-]?\\d+\\.?\\d*)\\s*%\\s*\\)/);
-                    if (combo) {
-                        const sign   = combo[1].trim().startsWith('-') ? '-' : '+';
-                        const digits = combo[2].replace(/[+\\-]/, '').trim();
-                        if (parseFloat(digits) !== 0) return sign + digits + '%';
-                    }
-                    const direct = text.match(/([+\\-]\\d+\\.\\d+%)/);
-                    if (direct && parseFloat(direct[1]) !== 0) return direct[1];
-                    return 'N/A';
+        # ── 등락률 추출 — 4단계 fallback ────────────────────────
+        # [PATCH] 부호 없는 퍼센트도 앞 변동폭 부호로 방향 추론
+        change_pct = await page.evaluate("""
+            () => {
+                const text = document.body ? document.body.innerText : '';
+
+                // 1순위: "+1,280 (+0.67%)" / "+1,280 (0.67%)" 콤보
+                const combo = text.match(/([+\\-][\\d,]+)\\s*\\(\\s*([+\\-]?\\d+\\.?\\d*)\\s*%\\s*\\)/);
+                if (combo) {
+                    const sign   = combo[1].trim().startsWith('-') ? '-' : '+';
+                    const digits = combo[2].replace(/[+\\-]/, '').trim();
+                    if (parseFloat(digits) !== 0) return sign + digits + '%';
                 }
-            """)
+
+                // 2순위: "(+0.67%)" 부호 포함 괄호
+                const paren = text.match(/\\(\\s*([+\\-]\\d+\\.?\\d*)\\s*%\\s*\\)/);
+                if (paren) {
+                    const v = paren[1].trim();
+                    if (parseFloat(v) !== 0) return v + '%';
+                }
+
+                // 3순위: "+0.67%" 단독 (소수점 필수)
+                const direct = text.match(/([+\\-]\\d+\\.\\d+%)/);
+                if (direct && parseFloat(direct[1]) !== 0) return direct[1];
+
+                // 4순위: ▲▼ 화살표 기호
+                const up   = text.match(/[▲↑⬆]\\s*(\\d+\\.?\\d*)%/);
+                if (up)   return '+' + up[1]   + '%';
+                const down = text.match(/[▼↓⬇]\\s*(\\d+\\.?\\d*)%/);
+                if (down) return '-' + down[1] + '%';
+
+                return 'N/A';
+            }
+        """)
+
         print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
 
         if price:
@@ -510,6 +585,26 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
     return {**base, "status": "ERROR: 가격 파싱 실패"}
 
+
+def _scrape_nim_api(target: dict) -> dict:
+    display = f"{target['exchange']}·{target['ticker']}"
+    base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
+
+    price, change_pct = _fetch_sina_price(target["sina_code"])
+    if price:
+        print(f"  Sina OK {display}: {price:,}")
+        return {**base, "date": datetime.now().strftime("%b %d, %Y"),
+                "latest": price, "latest_vat_excl": round(price / VAT_RATE),
+                "change_pct": change_pct, "prev_close": None, "status": "OK"}
+
+    print(f"  Sina 실패 → SHFE API {display}")
+    price, change_pct = _fetch_exchange_settlement(target)
+    if price:
+        return {**base, "date": datetime.now().strftime("%b %d, %Y"),
+                "latest": price, "latest_vat_excl": round(price / VAT_RATE),
+                "change_pct": change_pct, "prev_close": None, "status": "OK"}
+
+    return {**base, "status": "ERROR: 가격 파싱 실패"}
 
 
 def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None,
@@ -587,11 +682,11 @@ def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None,
                     if date_text_m:
                         pub_date = parse_date(date_text_m.group(0))
 
-                # ── pub_date 불명 → 오늘자 간주 (포함) ──────────
-                # news.metal.com 날짜 파싱 실패가 정상 (메타태그 미지원)
-                # 목록 최신순 기사라 날짜불명이어도 오늘자로 처리
+                # ── pub_date 확인 불가 → 제외 ────────────────────
                 if pub_date is None:
-                    pub_date = datetime.utcnow()
+                    print(f"  SMM 날짜불명 제외: {url[-25:]}")
+                    skipped_date += 1
+                    continue
 
                 # ── cutoff 필터 ──────────────────────────────────
                 if cutoff and pub_date < cutoff:
@@ -637,7 +732,7 @@ def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None,
             except Exception:
                 continue
 
-        print(f"  SMM 직접: {len(articles)}건 (날짜확인:{fetched - skipped_dup}건 / 중복제외:{skipped_dup}건)")
+        print(f"  SMM 직접: {len(articles)}건 / 날짜제외:{skipped_date} / 중복:{skipped_dup}")
         return articles
 
     except Exception as e:
@@ -854,7 +949,10 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                          "ticker": "LME·3M", "status": "ERROR: 수집 실패"}
                     print("W 실패")
                 futures_results.append(r)
-
+            else:
+                r = _scrape_nim_api(t)
+                futures_results.append(r)
+                print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
 
         await browser.close()
 
@@ -1007,8 +1105,6 @@ def collect_rss():
                 pub_str   = (entry.findtext("pubDate") or "").strip()
                 source_el = entry.find("source")
                 source    = source_el.text.strip() if source_el is not None else ""
-                # ★ source 태그의 url 속성도 체크 (Google News 우회 방지)
-                source_url = (source_el.get("url", "") or "").lower() if source_el is not None else ""
                 snippet   = decode_entities(
                     re.sub(r'<[^>]+>', '', entry.findtext("description") or "")
                 )[:200]
@@ -1029,7 +1125,7 @@ def collect_rss():
                 ls = source.lower()
                 ll = link.lower()
 
-                if any(s in ls or s in ll or s in source_url for s in NOISE_SOURCES):
+                if any(s in ls or s in ll for s in NOISE_SOURCES):
                     continue
                 if any(p in ll for p in NOISE_URL_PATHS):
                     continue
@@ -1786,3 +1882,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
