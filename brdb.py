@@ -268,7 +268,7 @@ WHITELIST = [
     "hydrometallurgy", "hydromet", "hpal",
     "pyrometallurgy", "smelting", "습식제련", "건식제련",
     "lfp", "lithium iron phosphate",
-    "gigafactory", "kwh", "mwh", "ev ", "electric vehicle",
+    "gigafactory", "kwh", "mwh", "ev ", "electric vehicle", "전기차", "이차전지",
     "fastmarkets", "benchmark mineral", "s&p global", "smm",
     "sungeel", "성일", "ascend", "redwood", "cirba", "ecobat", "umicore", "glencore",
     "retriev", "battery resources", "interco", "princeton nuenergy",
@@ -1204,7 +1204,8 @@ async def enrich_articles(articles):
                        if any(k in a["title"].lower() for k in [
                            "battery recycl", "ev recycl", "black mass", "블랙매스",
                            "배터리 재활용", "폐배터리", "사용후배터리",
-                           "hydromet", "hpal", "이차전지 재활용"])]
+                           "hydromet", "hpal", "이차전지 재활용",
+                           "이차전지", "전기차"])]
     others  = [a for a in general_pool if a not in recycling_boost]
     general = (recycling_boost + others)[:max(0, 15 - len(sungeel) - len(priority))]
     targets = smm + sungeel + priority + general
