@@ -395,64 +395,6 @@ async def _scrape_spot(page, target: dict) -> dict:
 
 
 
-def _fetch_exchange_settlement(target: dict) -> tuple:
-    """GFEX 탄산리튬 결산가 API — 최근 거래일 롤백."""
-    exchange = target["exchange"]
-
-    if exchange == "GFEX":
-        # 최근 거래일 롤백: 오늘 → 어제 → 그제 (주말·공휴일 대응, 최대 5일 탐색)
-        trade_dates = []
-        d = datetime.now()
-        for _ in range(7):
-            if d.weekday() < 5:  # 월~금
-                trade_dates.append(d.strftime("%Y%m%d"))
-            d -= timedelta(days=1)
-            if len(trade_dates) >= 3:
-                break
-
-        gfex_urls = []
-        for td in trade_dates:
-            gfex_urls.append(f"https://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={td}")
-            gfex_urls.append(f"http://www.gfex.com.cn/u/interfacesWebTyre/getSettlementInfo?variety=lc&trade_date={td}")
-        for url in gfex_urls:
-            try:
-                resp = requests.get(url, timeout=10, verify=False,
-                    headers={"Referer": "https://www.gfex.com.cn/",
-                             "User-Agent": "Mozilla/5.0",
-                             "Accept": "application/json, text/plain, */*"})
-                if resp.status_code != 200:
-                    continue
-                raw = resp.text.strip()
-                if not raw or len(raw) < 10:
-                    continue
-                try:
-                    data      = resp.json()
-                    contracts = data if isinstance(data, list) else data.get("data", [])
-                    contracts = [x for x in contracts
-                                 if float(x.get("settlementPrice") or x.get("SETTLEMENTPRICE") or 0) > 0]
-                    if not contracts:
-                        continue
-                    main   = max(contracts, key=lambda x: float(
-                        x.get("openInterest") or x.get("OPENINTEREST") or 0))
-                    settle = int(float(main.get("settlementPrice") or main.get("SETTLEMENTPRICE")))
-                    prev   = float(main.get("preSettlementPrice") or main.get("PRESETTLEMENTPRICE") or 0)
-                    pct    = f"{(settle-prev)/prev*100:+.2f}%" if prev else "N/A"
-                    print(f"  GFEX 결산 LC: {settle:,} CNY/t ({pct})")
-                    return settle, pct
-                except Exception:
-                    pass
-                nums = re.findall(r'\b(1[0-9]{4,5}|[5-9][0-9]{4})\b', raw)
-                if nums:
-                    settle = int(nums[0])
-                    print(f"  GFEX fallback LC: {settle:,}")
-                    return settle, "N/A"
-            except Exception as e:
-                print(f"  GFEX API 오류 ({url[:50]}): {e}")
-        print("  GFEX API 전체 실패 → N/A")
-        return None, "N/A"
-
-    return None, "N/A"
-
 
 async def _scrape_lcm_playwright(page, target: dict) -> dict:
     """www.metal.com/gfex — GFEX 탄산리튬 선물 주계약 수집.
@@ -470,39 +412,38 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
         except Exception:
             pass
 
-        # ── 가격 추출 ───────────────────────────────────────────
-        price = await page.evaluate("""
+        # ── 가격 + 등락률 동시 추출 (JS only) ──────────────────
+        # 페이지 표시: 시세 | 등락값 | 등락률
+        # 가격(100000-300000) 주변 ±250자에서 소수점 포함 % 탐색
+        result = await page.evaluate("""
             () => {
-                const text = (document.body ? document.body.innerText : '')
-                             .replace(/[,，]/g, '');
-                const nums = text.match(/[1-9]\\d{4,5}/g) || [];
-                for (const s of nums) {
-                    const n = parseInt(s);
-                    if (n >= 100000 && n <= 300000) return n;
+                const raw = (document.body ? document.body.innerText : '')
+                            .replace(/[,]/g, '');
+                let price = null, pricePos = -1;
+                let pos = 0;
+                while (pos < raw.length) {
+                    const m = raw.slice(pos).match(/\\b([1-3]\\d{5})\\b/);
+                    if (!m) break;
+                    const n = parseInt(m[1]);
+                    if (n >= 100000 && n <= 300000) {
+                        price = n; pricePos = pos + m.index; break;
+                    }
+                    pos += m.index + m[1].length;
                 }
-                return null;
+                if (price === null) return { price: null, pct: 'N/A' };
+                const win = raw.substring(Math.max(0, pricePos - 80), pricePos + 250);
+                const all = [...win.matchAll(/([+\\-]?\\d+\\.\\d+)\\s*%/g)];
+                for (const m2 of all) {
+                    const v = parseFloat(m2[1]);
+                    if (Math.abs(v) > 0 && Math.abs(v) < 25) {
+                        return { price: price, pct: (v >= 0 ? '+' : '') + v.toFixed(2) + '%' };
+                    }
+                }
+                return { price: price, pct: 'N/A' };
             }
         """)
-
-        # ── 등락률: GFEX 결산가 API (SMM·LME와 동일 원리)
-        # 최근 거래일 롤백으로 주말/장중 모두 안정적으로 수집
-        _, change_pct = _fetch_exchange_settlement(target)
-        if change_pct == "N/A":
-            # API 실패 시 JS evaluate fallback
-            change_pct = await page.evaluate("""
-                () => {
-                    const text = document.body ? document.body.innerText : '';
-                    const combo = text.match(/([+\\-][\\d,]+)\\s*\\(\\s*([+\\-]?\\d+\\.?\\d*)\\s*%\\s*\\)/);
-                    if (combo) {
-                        const sign   = combo[1].trim().startsWith('-') ? '-' : '+';
-                        const digits = combo[2].replace(/[+\\-]/, '').trim();
-                        if (parseFloat(digits) !== 0) return sign + digits + '%';
-                    }
-                    const direct = text.match(/([+\\-]\\d+\\.\\d+%)/);
-                    if (direct && parseFloat(direct[1]) !== 0) return direct[1];
-                    return 'N/A';
-                }
-            """)
+        price      = result.get("price") if result else None
+        change_pct = result.get("pct", "N/A") if result else "N/A"
         print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
 
         if price:
@@ -522,136 +463,121 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
 
 
-def _fetch_smm_articles(max_fetch: int = 8, cutoff: datetime = None,
-                        existing_titles: list = None) -> list:
-    """news.metal.com 직접 스크래핑.
-    [PATCH]
-    - 날짜 파싱 3단계 fallback
-    - pub_date=None → 무조건 제외 (오래된 기사 반복 방지 핵심)
-    - existing_titles: RSS dedup 후 기사 목록 → title 중복 체크
+def _fetch_smm_rss(max_fetch: int = 10, cutoff: datetime = None,
+                   existing_titles: list = None) -> list:
+    """SMM RSS 피드 기반 기사 수집.
+    https://rss.metal.com/news/the_latest.xml
+    <metal> 태그로 배터리/니켈 관련 1차 필터 → 키워드 2차 필터 → cutoff 날짜 필터
+    장점: pubDate 표준 제공, 개별 페이지 방문 불필요, 날짜 정확
     """
-    SMM_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    RSS_URL = "https://rss.metal.com/news/the_latest.xml"
+
+    # 배터리 재활용 관련 metal 카테고리
+    RELEVANT_METALS = {
+        "new energy", "lithium battery", "energy storage",
+        "sodium battery", "nickel", "cobalt", "rare earth", "scrap metals",
+    }
     SMM_KEYWORDS = {
         "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
-        "cathode", "precursor", "lme", "sulfate", "hydroxide", "carbonate",
+        "cathode", "precursor", "sulfate", "hydroxide", "carbonate",
+        "mhp", "npi", "storage", "sodium", "rare earth", "lfp", "ncm", "nca",
     }
     existing_titles = existing_titles or []
 
-    def _title_dup(new_title: str) -> bool:
-        words_new = {w for w in re.sub(r'[^\w\s]', ' ', new_title).split() if len(w) >= 3}
+    def _parse_pubdate(s: str):
+        """SMM pubDate 포맷: '12:00:53 Jun 08, 2026 ' → datetime"""
+        try:
+            return datetime.strptime(s.strip(), "%H:%M:%S %b %d, %Y")
+        except Exception:
+            return None
+
+    def _title_dup(title: str) -> bool:
+        words_new = {w for w in re.sub(r"[^\w\s]", " ", title).split() if len(w) >= 3}
         for t in existing_titles:
-            words_t = {w for w in re.sub(r'[^\w\s]', ' ', t).split() if len(w) >= 3}
+            words_t = {w for w in re.sub(r"[^\w\s]", " ", t).split() if len(w) >= 3}
             if len(words_new & words_t) >= 4:
                 return True
         return False
 
     try:
-        r = requests.get("https://news.metal.com/en/", timeout=12, headers=SMM_HEADERS)
-        if r.status_code != 200:
-            print(f"  SMM 직접: 목록 {r.status_code}")
-            return []
-        ids = list(dict.fromkeys(re.findall(r'/newscontent/(\d{8,})', r.text)))[:max_fetch * 3]
-        if not ids:
+        resp = requests.get(RSS_URL, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        if resp.status_code != 200:
+            print(f"  SMM RSS: HTTP {resp.status_code}")
             return []
 
+        root = ET.fromstring(resp.content)
         articles      = []
-        fetched       = 0
+        skipped_metal = 0
         skipped_date  = 0
         skipped_dup   = 0
 
-        for article_id in ids:
-            if fetched >= max_fetch:
-                break
-            try:
-                url = f"https://news.metal.com/newscontent/{article_id}"
-                r2  = requests.get(url, timeout=10, headers=SMM_HEADERS)
-                if r2.status_code != 200:
-                    continue
-
-                # ── 날짜 파싱 3단계 ──────────────────────────────
-                pub_date = None
-
-                # 1단계: article:published_time 또는 datePublished 메타태그
-                m_date = (
-                    re.search(r'property="article:published_time"\s+content="([^"]+)"', r2.text) or
-                    re.search(r'content="([^"]+)"\s+property="article:published_time"', r2.text) or
-                    re.search(r'"datePublished"\s*:\s*"([^"]+)"', r2.text) or
-                    re.search(r'"publishedAt"\s*:\s*"([^"]+)"', r2.text)
-                )
-                if m_date:
-                    pub_date = parse_date(m_date.group(1))
-
-                # 2단계: ISO datetime 패턴 검색
-                if not pub_date:
-                    iso_m = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', r2.text[:8000])
-                    if iso_m:
-                        pub_date = parse_date(iso_m.group(1))
-
-                # 3단계: "May 18, 2026" 또는 "2026-05-18" 텍스트 패턴
-                if not pub_date:
-                    date_text_m = re.search(
-                        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}'
-                        r'|\b\d{4}-\d{2}-\d{2}\b',
-                        r2.text[:8000]
-                    )
-                    if date_text_m:
-                        pub_date = parse_date(date_text_m.group(0))
-
-                # ── pub_date 불명 → 오늘자 간주 (포함) ──────────
-                # news.metal.com 날짜 파싱 실패가 정상 (메타태그 미지원)
-                # 목록 최신순 기사라 날짜불명이어도 오늘자로 처리
-                if pub_date is None:
-                    pub_date = datetime.utcnow()
-
-                # ── cutoff 필터 ──────────────────────────────────
-                if cutoff and pub_date < cutoff:
-                    print(f"  SMM 날짜제외: {pub_date.strftime('%Y-%m-%d')} {url[-25:]}")
-                    skipped_date += 1
-                    continue
-
-                # ── 제목 파싱 ────────────────────────────────────
-                m_t = (re.search(r'property="og:title"\s+content="([^"]+)"', r2.text) or
-                       re.search(r'content="([^"]+)"\s+property="og:title"', r2.text))
-                if not m_t:
-                    continue
-                title = html_lib.unescape(m_t.group(1))
-                title = re.sub(r'\s*[-|]\s*Shanghai Metals Market.*$', '', title).strip()
-
-                if not any(k in title.lower() for k in SMM_KEYWORDS):
-                    continue
-
-                # ── title 중복 체크 (RSS dedup 기사와 비교) ───────
-                if _title_dup(title):
-                    print(f"  SMM title중복 제외: {title[:40]}")
-                    skipped_dup += 1
-                    continue
-
-                m_d = (re.search(r'property="og:description"\s+content="([^"]+)"', r2.text) or
-                       re.search(r'content="([^"]+)"\s+property="og:description"', r2.text))
-                snippet = html_lib.unescape(m_d.group(1))[:200] if m_d else ""
-
-                articles.append({
-                    "title":    title,
-                    "link":     url,
-                    "snippet":  snippet,
-                    "source":   "SMM Metal",
-                    "priority": False,
-                    "pub_date": pub_date,
-                    "pub":      pub_date.strftime("%Y-%m-%d"),
-                    "lang":     "en",
-                })
-                existing_titles.append(title)
-                fetched += 1
-                time.sleep(0.3)
-
-            except Exception:
+        for item in root.findall(".//item"):
+            # <metal> 태그로 1차 필터
+            metal_el   = item.find("metal")
+            metal_text = (metal_el.text or "").lower() if metal_el is not None else ""
+            metals     = {m.strip() for m in metal_text.split(",")}
+            if not (metals & RELEVANT_METALS):
+                skipped_metal += 1
                 continue
 
-        print(f"  SMM 직접: {len(articles)}건 (날짜확인:{fetched - skipped_dup}건 / 중복제외:{skipped_dup}건)")
+            # 제목 추출
+            title_el = item.find("title")
+            title    = (title_el.text or "").strip() if title_el is not None else ""
+            if not title:
+                continue
+
+            # 날짜 파싱 — RSS는 pubDate 정확
+            pub_el   = item.find("pubDate")
+            pub_str  = (pub_el.text or "").strip() if pub_el is not None else ""
+            pub_date = _parse_pubdate(pub_str)
+            if pub_date is None:
+                skipped_date += 1
+                continue
+            if cutoff and pub_date < cutoff:
+                skipped_date += 1
+                continue
+
+            # 링크 추출
+            link_el = item.find("link")
+            link    = (link_el.text or "").strip() if link_el is not None else ""
+            if not link:
+                continue
+
+            # 스니펫 (description)
+            desc_el = item.find("description")
+            snippet = (desc_el.text or "").strip()[:400] if desc_el is not None else ""
+
+            # 키워드 2차 필터 (제목+스니펫)
+            combined = (title + " " + snippet).lower()
+            if not any(k in combined for k in SMM_KEYWORDS):
+                skipped_metal += 1
+                continue
+
+            # 중복 체크
+            if _title_dup(title):
+                skipped_dup += 1
+                continue
+
+            articles.append({
+                "title":    title,
+                "link":     link,
+                "snippet":  snippet,
+                "source":   "SMM Metal",
+                "priority": False,
+                "pub_date": pub_date,
+                "pub":      pub_date.strftime("%Y-%m-%d"),
+                "lang":     "en",
+            })
+            existing_titles.append(title)
+            if len(articles) >= max_fetch:
+                break
+
+        print(f"  SMM RSS: {len(articles)}건 (관련도제외:{skipped_metal} / 날짜제외:{skipped_date} / 중복:{skipped_dup})")
         return articles
 
     except Exception as e:
-        print(f"  SMM 직접 오류: {e}")
+        print(f"  SMM RSS 오류: {e}")
         return []
 
 
@@ -1123,7 +1049,7 @@ def collect_rss():
 
     # SMM 직접 수집 — existing_titles 전달로 title dedup 적용
     existing_titles_for_smm = [a["title"] for a in deduped]
-    smm_direct = _fetch_smm_articles(cutoff=cutoff, existing_titles=existing_titles_for_smm)
+    smm_direct = _fetch_smm_rss(cutoff=cutoff, existing_titles=existing_titles_for_smm)
     for a in smm_direct:
         if not any(a["link"] == x.get("link") for x in deduped):
             deduped.append(a)
@@ -1200,17 +1126,24 @@ async def enrich_articles(articles):
     general_pool = [a for a in articles
                     if "SMM" not in a.get("source", "")
                     and a not in sungeel and a not in priority]
-    recycling_boost = [a for a in general_pool
-                       if any(k in a["title"].lower() for k in [
-                           "battery recycl", "ev recycl", "black mass", "블랙매스",
-                           "배터리 재활용", "폐배터리", "사용후배터리",
-                           "hydromet", "hpal", "이차전지 재활용",
-                           "이차전지", "전기차"])]
-    others  = [a for a in general_pool if a not in recycling_boost]
-    general = (recycling_boost + others)[:max(0, 15 - len(sungeel) - len(priority))]
-    targets = smm + sungeel + priority + general
 
-    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+시황{len(priority)}+일반{len(general)}={len(targets)}건")
+    # 밸류체인 boost: 재활용 직접 언급 없어도 성일 사업과 직결
+    # - 국내 배터리셀 3사(SK온·LG에너지솔루션·삼성SDI) → 폐배터리 공급처(업스트림)
+    # - 이차전지·전기차 시장 → 폐배터리 발생량 결정하는 수요 지표
+    # - 양극재·전구체 업체 → 성일 제품(황산니켈·황산코발트) 수요처(다운스트림)
+    _VC_KW = [
+        "이차전지", "전기차", "배터리 재활용", "폐배터리", "사용후배터리", "블랙매스",
+        "battery recycl", "ev recycl", "black mass", "hydromet", "hpal", "이차전지 재활용",
+        "sk온", "lg에너지솔루션", "삼성sdi", "sk on", "lg energy solution", "samsung sdi",
+        "양극재", "전구체", "에코프로비엠", "포스코퓨처엠", "엘앤에프",
+    ]
+    vc_boost   = [a for a in general_pool if any(k in a["title"].lower() for k in _VC_KW)]
+    others     = [a for a in general_pool if a not in vc_boost]
+    general    = (vc_boost + others)[:max(0, 15 - len(sungeel) - len(priority))]
+    targets    = smm + sungeel + priority + general
+
+    vc_ko = sum(1 for a in vc_boost if a.get("lang") == "ko")
+    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+시황{len(priority)}+밸류체인{len(vc_boost)}(한국어{vc_ko}건)+기타{len(others[:max(0,15-len(sungeel)-len(priority)-len(vc_boost))])}={len(targets)}건")
 
     browser = None
     async with async_playwright() as p:
@@ -1311,12 +1244,21 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 [일반 뉴스]
 {gen_sec}
 
+[성일하이텍 사업 맥락 — 선별 기준으로 활용]
+성일하이텍은 한국 최대 리튬이온배터리 재활용 업체로, 블랙매스에서 황산코발트·황산니켈·탄산리튬을 습식제련으로 생산한다.
+- 업스트림(원료 공급): SK온·LG에너지솔루션·삼성SDI·CATL·BYD 등 배터리셀 제조사 → 폐배터리·스크랩 공급처
+- 다운스트림(제품 수요): 에코프로비엠·포스코퓨처엠·엘앤에프 등 양극재·전구체 업체, 글로벌 배터리소재 업체
+- 시장 지표: 이차전지·전기차 시장 동향 → 미래 폐배터리 발생량 결정
+따라서 재활용 직접 언급이 없어도, 위 밸류체인 관련 기사는 성일 사업과 직결된 중요 정보다.
+
 [필수 선별 규칙]
 - articles는 반드시 8건 이상 12건 이하로 선택.
 - 위 뉴스 목록에서 최대한 많이 선택. 관련도 낮아도 배터리/소재/공급망이면 포함.
-- 성일하이텍 기사 반드시 포함.
+- 성일하이텍 기사 반드시 포함 (없으면 밸류체인 관련 한국 기사로 대체).
+- 한국 배터리 밸류체인 기사(SK온·LG에너지솔루션·삼성SDI·이차전지·전기차·양극재) 최소 2건 이상 선택.
+- LNG·석유·태양전지·아이오딘 등 배터리 밸류체인과 무관한 기사는 제외.
 - 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
-- 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사
+- 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사/LNG/석유/태양전지
 
 ★ [유사 기사 통합 규칙]
 - 동일 이슈 기사가 2건 이상이면 가장 정보가 풍부한 1건만 선택.
