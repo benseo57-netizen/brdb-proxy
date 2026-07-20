@@ -196,6 +196,10 @@ NOISE_KEYWORDS = [
     "oppo", "vivo", "realme", "honor phone",
     "táblagép", "diákoknak", "tablet pc",
     "试驾", "续航里程达成率", "驾驶体验",
+    # ★ 추가: 전자폐기물(e-waste) 일반, 스포츠 마케팅, 소비자 차량 결함
+    "e-waste leader", "ewaste leader", "e-waste market", "ewaste market",
+    "paris saint-germain", "psg sponsor", "byd psg",
+    "通病集中爆发", "续航有", "车子开着",
 ]
 
 NOISE_SOURCES = [
@@ -212,6 +216,9 @@ NOISE_SOURCES = [
     "bitget", "belfasttelegraph", "technetbooks", "saudigazette", "techjuice",
     "mexc", "autohome",
     "bravenewcoin", "kalkinemedia", "marketindex.com.au", "harianbasis",
+    # ★ 추가: 정부방송 재발행 오염, 전자폐기물 일반 사이트
+    "newsonair.gov.in", "akashvani", "pib.gov.in",
+    "tradebrains.in",
 ]
 
 NOISE_URL_PATHS = ["/stock/", "/en/stock/", "/stocks/", "/share-price/", "/equity/"]
@@ -220,6 +227,7 @@ NOISE_PAIRS = [
     ("plastic", "recycl"), ("alumin", "recycl"), ("bauxite", "recycl"),
     ("fiber", "recycl"), ("packaging", "recycl"), ("paper", "recycl"),
     ("recycled film", "feedstock"), ("scrap", "alumin"),
+    ("e-waste", "phone"), ("e-waste", "electronic"), ("namo", "waste"),
 ]
 
 _NOISE_RE_KO = re.compile(
@@ -278,7 +286,7 @@ WHITELIST = [
     "에코프로비엠", "에코프로", "포스코퓨처엠", "엘앤에프", "성일하이텍",
     "albemarle", "sqm", "ganfeng", "tianqi",
     "pilbara", "liontown", "arcadium", "sigma lithium",
-    "circular economy", "생산자책임",
+    "circular economy", "생산자책임", "drc cobalt", "kcc mine", "cobalt quota", "mhp payables",
     # 인도네시아어: 니켈 제련 특화
     "nikel", "rkef", "hpal", "ferronickel", "hilirisasi",
     "akkumulátor", "akkuhulladék",
@@ -398,7 +406,7 @@ async def _scrape_spot(page, target: dict) -> dict:
 
 async def _scrape_lcm_playwright(page, target: dict) -> dict:
     """www.metal.com/gfex — GFEX 탄산리튬 선물 주계약 수집.
-    [PATCH] pct 추출: 4단계 fallback, 부호 없는 퍼센트도 변동폭 부호로 추론.
+    가격(100000-300000) 주변 ±250자에서 소수점 포함 % 동시 추출 (JS only).
     """
     display = f"{target['exchange']}·{target['ticker']}"
     base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
@@ -463,7 +471,7 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
 
 
 
-def _fetch_smm_rss(max_fetch: int = 10, cutoff: datetime = None,
+def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
                    existing_titles: list = None) -> list:
     """SMM RSS 피드 기반 기사 수집.
     https://rss.metal.com/news/the_latest.xml
@@ -528,13 +536,16 @@ def _fetch_smm_rss(max_fetch: int = 10, cutoff: datetime = None,
                 continue
 
             # 날짜 파싱 — RSS는 pubDate 정확
+            # SMM pubDate는 CST(UTC+8) 기준이나 timezone 없이 파싱됨
+            # cutoff 비교 시 8시간 여유를 줘서 오전 기사 누락 방지
             pub_el   = item.find("pubDate")
             pub_str  = (pub_el.text or "").strip() if pub_el is not None else ""
             pub_date = _parse_pubdate(pub_str)
             if pub_date is None:
                 skipped_date += 1
                 continue
-            if cutoff and pub_date < cutoff:
+            smm_cutoff = (cutoff - timedelta(hours=8)) if cutoff else None
+            if smm_cutoff and pub_date < smm_cutoff:
                 skipped_date += 1
                 continue
 
@@ -977,8 +988,8 @@ def collect_rss():
 
                 pub_date = parse_date(pub_str)
 
-                # KST 어제 자정 이전 기사 제외
-                if pub_date and pub_date < cutoff:
+                # KST 어제 자정 이전 기사 제외 (날짜 불명 기사도 제외)
+                if not pub_date or pub_date < cutoff:
                     continue
 
                 if "metal.com" in link.lower():
@@ -1114,7 +1125,7 @@ def is_battery_relevant(title: str) -> bool:
     return any(k in title.lower() for k in _BATTERY_RELEVANCE_KW)
 
 async def enrich_articles(articles):
-    smm = [a for a in articles if "SMM" in a.get("source", "")][:2]
+    smm = [a for a in articles if "SMM" in a.get("source", "")][:3]
     sk  = ["성일하이텍", "sungeel", "성일"]
     sungeel = [a for a in articles
                if "SMM" not in a.get("source", "")
@@ -1203,7 +1214,7 @@ async def enrich_articles(articles):
 def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     today = now_kst().strftime("%Y년 %m월 %d일")
 
-    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")][:2]
+    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")][:3]
     general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
     def fmt_article(i, a):
@@ -1259,6 +1270,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 - LNG·석유·태양전지·아이오딘 등 배터리 밸류체인과 무관한 기사는 제외.
 - 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
 - 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사/LNG/석유/태양전지
+- 금지: 기사 본문에 언급된 발표·보도 날짜가 14일 이상 이전인 기사 (MOU·정책 발표 등 오래된 뉴스)
 
 ★ [유사 기사 통합 규칙]
 - 동일 이슈 기사가 2건 이상이면 가장 정보가 풍부한 1건만 선택.
