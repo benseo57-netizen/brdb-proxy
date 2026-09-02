@@ -1,5 +1,6 @@
 import os
 import json
+import glob
 import asyncio
 import smtplib
 import requests
@@ -28,6 +29,13 @@ BCC_EMAIL      = os.environ.get('BCC_EMAIL', '')
 
 genai.configure(api_key=GEMINI_API_KEY)
 
+# GitHub Pages
+GITHUB_USER = "benseo57-netizen"
+REPO_NAME   = "brdb-proxy"
+WEB_BASE    = f"https://{GITHUB_USER}.github.io/{REPO_NAME}"
+
+PRICE_JSON = "docs/data/prices.json"
+
 # ============================================================
 # SMM 시세 설정
 # ============================================================
@@ -44,119 +52,56 @@ SPOT_TARGETS = [
 ]
 
 FUTURES_EM = [
-    {
-        "name":      "탄산리튬 선물",
-        "exchange":  "GFEX",
-        "url":       "https://www.metal.com/gfex",
-        "ticker":    "LCM",
-        "method":    "playwright",
-    },
-    {
-        "name":      "니켈 선물",
-        "exchange":  "LME",
-        "ticker":    "LME·3M",
-        "method":    "metalradar",
-    },
+    {"name": "탄산리튬 선물", "exchange": "GFEX",
+     "url": "https://www.metal.com/gfex", "ticker": "LCM", "method": "playwright"},
+    {"name": "니켈 선물", "exchange": "LME",
+     "ticker": "LME·3M", "method": "metalradar"},
+]
+
+# 날씨 (Open-Meteo, API 키 불필요)
+WEATHER_SPOTS = [
+    {"name": "새만금", "lat": 35.80,   "lon": 126.62},
+    {"name": "전주",   "lat": 35.8242, "lon": 127.1480},
+    {"name": "서울",   "lat": 37.5665, "lon": 126.9780},
 ]
 
 # ============================================================
-# RSS 쿼리
+# 피드 정의 (Inoreader 구독 기반)
 # ============================================================
-QUERIES = [
-    {"q": '("황산니켈" OR "황산코발트" OR "탄산리튬" OR "수산화리튬") ("가격" OR "시황" OR "공급")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '("nickel sulfate" OR "cobalt sulfate" OR "lithium carbonate" OR "lithium hydroxide") ("price" OR "market" OR "supply")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("nickel" OR "cobalt") ("battery" OR "supply chain") ("price" OR "shortage" OR "market" OR "index")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"lithium" ("battery" OR "recycling") ("price" OR "spot" OR "supply" OR "shortage")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("硫酸镍" OR "硫酸钴" OR "碳酸锂" OR "氢氧化锂") ("价格" OR "现货" OR "供应")',
-     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-    {"q": '"SMM" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-    {"q": '"Fastmarkets" ("nickel" OR "cobalt" OR "lithium" OR "black mass" OR "battery")',
-     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-    {"q": '"S&P Global" ("battery" OR "recycling" OR "black mass" OR "lithium carbonate" OR "nickel sulfate" OR "cobalt sulfate" OR "EV battery")',
-     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-    {"q": '"Benchmark Mineral Intelligence" OR "Benchmark Minerals" ("lithium" OR "battery" OR "cathode" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en", "priority": True},
-    {"q": '"성일하이텍" OR "에코프로씨엔지" OR "아이에스티엠씨" OR "IS에코솔루션"',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '"SungEel" OR "Sungeel HiTech" OR "IS Eco Solution"',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("Ascend Elements" OR "Redwood Materials" OR "Umicore") ("battery" OR "recycling" OR "black mass" OR "cathode")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"Glencore" ("cobalt" OR "nickel" OR "battery recycling" OR "black mass")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"Cirba Solutions" OR "Ecobat" OR "Retriev" OR "Ace Green" OR "Battery Resources" OR "Interco" OR "Princeton NuEnergy"',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("Fortum" OR "Stena Recycling" OR "BASF") ("battery" OR "recycling" OR "black mass")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("black mass" OR "battery scrap" OR "feedstock") ("price" OR "shortage" OR "tender" OR "payables")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("블랙매스" OR "폐배터리 스크랩") ("입찰" OR "매입가" OR "공급")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '"SK온" ("배터리" OR "ESS" OR "공장" OR "계약" OR "생산" OR "수주" OR "JV" OR "합작")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '"LG에너지솔루션" ("배터리" OR "셀" OR "공장" OR "계약" OR "생산" OR "수주" OR "공급" OR "합작")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '"삼성SDI" ("배터리" OR "셀" OR "전고체" OR "공장" OR "계약" OR "생산" OR "수주" OR "전구체")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '("SK On" OR "LG Energy Solution" OR "Samsung SDI") ("battery" OR "factory" OR "supply" OR "contract" OR "gigafactory" OR "cathode" OR "ESS")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("CATL" OR "BYD") ("battery recycling" OR "cathode" OR "black mass" OR "supply chain" OR "gigafactory")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("宁德时代" OR "比亚迪") ("电池回收" OR "回收" OR "黑粉" OR "原材料" OR "碳酸锂" OR "供应链")',
-     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-    {"q": '"パナソニック" ("電池" OR "リサイクル" OR "リチウム" OR "EV")',
-     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
-    {"q": '"Northvolt" ("acquisition" OR "asset sale" OR "factory" OR "takeover" OR "insolvency")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("에코프로비엠" OR "엘앤에프" OR "포스코퓨처엠" OR "LG화학") -목표주가 -목표가 -증권',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '("EcoPro BM" OR "L&F" OR "POSCO Future M" OR "LG Chem") ("precursor" OR "cathode" OR "battery")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("住友金属鉱山" OR "日亜化学") ("正極材" OR "前駆体" OR "リサイクル" OR "電池")',
-     "lang": "ja", "gl": "JP", "ceid": "JP:ja"},
-    {"q": '("Albemarle" OR "SQM" OR "Ganfeng" OR "Tianqi") ("lithium" OR "mine" OR "production" OR "supply")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("Pilbara Minerals" OR "Liontown" OR "Arcadium" OR "Sigma Lithium") ("lithium" OR "mine" OR "production" OR "supply")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"Indonesia" ("nickel" OR "HPAL" OR "nickel ore") ("export" OR "price" OR "quota" OR "HPM" OR "mine")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    # 인도네시아어: 니켈 제련·시황 전용 (tambang 단독 쿼리 제거)
-    {"q": '("nikel" OR "HPAL" OR "RKEF") ("smelter" OR "hilirisasi nikel" OR "ferronickel" OR "nickel matte" OR "pemurnian")',
-     "lang": "id", "gl": "ID", "ceid": "ID:id"},
-    {"q": '("DRC" OR "Congo") ("cobalt" OR "mining") ("production" OR "export" OR "price" OR "supply")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("hydrometallurgy" OR "hydromet" OR "HPAL") ("battery" OR "recycling" OR "nickel" OR "cobalt" OR "lithium")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("pyrometallurgy" OR "smelting" OR "direct recycling") ("battery" OR "black mass" OR "recycling")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("LFP" OR "lithium iron phosphate") ("recycling" OR "recovery" OR "black mass")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("습식제련" OR "건식제련" OR "HPAL" OR "직접재활용") ("배터리" OR "재활용" OR "블랙매스")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '("EU Battery Regulation" OR "Battery Passport" OR "recycled content" OR "battery directive") ("compliance" OR "deadline" OR "standard")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("IRA" OR "OBBBA" OR "critical minerals") ("battery" OR "recycling" OR "supply chain")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"India" ("battery recycling" OR "EPR" OR "black mass" OR "CPCB" OR "critical mineral")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '("이차전지" OR "사용후배터리" OR "폐배터리") ("EPR" OR "핵심광물" OR "순환이용" OR "재활용 의무" OR "생산자책임")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": '"动力电池回收" ("政策" OR "标准" OR "法规")',
-     "lang": "zh-CN", "gl": "CN", "ceid": "CN:zh-CN"},
-    {"q": '"battery recycling" ("M&A" OR "acquisition" OR "joint venture" OR "investment" OR "funding")',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": '"배터리 재활용" ("투자" OR "JV" OR "파트너십" OR "인수" OR "합작")',
-     "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    # 헝가리어: akkumulátor 단독 제거(소비자 가전 오염), 복합어+법인 위치명으로 교체
-    {"q": '"SungEel" OR "Batonyterenye" OR "akkumulátor-újrahasznosítás" OR "akkumulátor visszagyűjtés" OR "akkuhulladék"',
-     "lang": "hu", "gl": "HU", "ceid": "HU:hu"},
-    {"q": '"news.metal.com" (nickel OR cobalt OR lithium OR "black mass" OR recycling)',
-     "lang": "en", "gl": "US", "ceid": "US:en"},
+
+# 배터리/EV 전문지 → 화이트리스트 통과 불필요
+PUBLISHER_FEEDS_SPECIAL = [
+    {"url": "https://batteriesnews.com/feed/",       "source": "Batteries News",      "lang": "en"},
+    {"url": "https://chargedevs.com/feed/",          "source": "Charged EVs",         "lang": "en"},
+    {"url": "https://www.electrive.net/feed/",       "source": "electrive",           "lang": "en"},
+    {"url": "https://www.energy-storage.news/feed/", "source": "Energy Storage News", "lang": "en"},
+]
+
+# 종합 매체 → 화이트리스트 검사 필요
+PUBLISHER_FEEDS_GENERAL = [
+    {"url": "https://www.theguru.co.kr/data/rss/news.xml", "source": "더구루", "lang": "ko"},
+    {"url": "http://www.thelec.kr/rss/allArticle.xml",     "source": "디일렉", "lang": "ko"},
+]
+
+# 구글 뉴스 — 단순 키워드로 넓게
+GOOGLE_FEEDS = [
+    {"q": "battery recycling", "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "lithium",           "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "nickel",            "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "cobalt",            "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "LFP",               "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "ESS",               "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "폐배터리",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "이차전지",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "2차전지",            "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "배터리",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "배터리ON",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "전기차",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "리튬",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "니켈",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "코발트",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "ESS",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "성일하이텍",         "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 ]
 
 # ============================================================
@@ -164,9 +109,9 @@ QUERIES = [
 # ============================================================
 NOISE_KEYWORDS = [
     "crypto", "bitcoin", "ethereum", "nft", "dogecoin",
-    "게임", "영화", "드라마", "리뷰", "car review", "smartphone review",
+    "게임", "영화", "드라마", "car review", "smartphone review",
     "xiaomi", "samsung galaxy", "iphone", "smartwatch", "okosóra",
-    "stock tip", "smartwatch",
+    "stock tip",
     "battery etf", "lithium etf", "stocks:", "is it too late",
     "stock surges", "stock falls", "stock rises", "stock drops",
     "shares surge", "shares fall",
@@ -187,19 +132,25 @@ NOISE_KEYWORDS = [
     "petro", "petroleum", "oil refin",
     "dow jones", "s&p 500", "nasdaq",
     "blue whale season", "whale watching", "whale migration",
-    "motorola", "samsung galaxy", "iphone", "ipad", "smartphone launch",
+    "motorola", "ipad", "smartphone launch",
     "foldable phone", "razr", "pixel phone", "snapdragon",
     "launched in india", "goes on sale", "pre-order",
     "playstation", "nintendo", "xbox", "gaming", "konzol", "konsol",
     "redmi", "poco", "iqoo", "oneplus", "nothing phone", "hordozható",
-    # ★ 추가: 스마트폰/태블릿/자동차 시승 노이즈
     "oppo", "vivo", "realme", "honor phone",
     "táblagép", "diákoknak", "tablet pc",
     "试驾", "续航里程达成率", "驾驶体验",
-    # ★ 추가: 전자폐기물(e-waste) 일반, 스포츠 마케팅, 소비자 차량 결함
     "e-waste leader", "ewaste leader", "e-waste market", "ewaste market",
     "paris saint-germain", "psg sponsor", "byd psg",
-    "通病集中爆发", "续航有", "车子开着",
+    "通病集中爆发", "车子开着",
+    # 전기차 쿼리 확대 대응
+    "신차 출시", "출시 임박", "사전계약", "시승기", "타보니",
+    "디자인 공개", "렌더링", "스파이샷", "풀체인지", "페이스리프트",
+    "보조금 신청", "충전소 설치",
+    "first drive", "road test", "review:", "hands-on",
+    "best electric cars", "buying guide", "deals",
+    # 종합매체 대응
+    "반도체 장비", "디스플레이 패널", "oled 패널", "메모리 반도체",
 ]
 
 NOISE_SOURCES = [
@@ -210,15 +161,12 @@ NOISE_SOURCES = [
     "msn", "msn.com", "aol.com", "simplywall.st", "futunn.com", "judal.co.kr",
     "investingnews.com", "thebull.com.au", "marketsmojo.com",
     "switzer.com.au", "nai500.com", "kalkinemedia.com",
-    # ★ 추가: 투자분석·일반매체 오염 소스
     "chartmill", "vozpopuli", "mixvale", "vietnam.vn",
     "ad-hoc-news", "stocktitan",
     "bitget", "belfasttelegraph", "technetbooks", "saudigazette", "techjuice",
     "mexc", "autohome",
-    "bravenewcoin", "kalkinemedia", "marketindex.com.au", "harianbasis",
-    # ★ 추가: 정부방송 재발행 오염, 전자폐기물 일반 사이트
-    "newsonair.gov.in", "akashvani", "pib.gov.in",
-    "tradebrains.in",
+    "marketindex.com.au", "harianbasis",
+    "newsonair.gov.in", "akashvani", "pib.gov.in", "tradebrains.in",
 ]
 
 NOISE_URL_PATHS = ["/stock/", "/en/stock/", "/stocks/", "/share-price/", "/equity/"]
@@ -276,30 +224,30 @@ WHITELIST = [
     "hydrometallurgy", "hydromet", "hpal",
     "pyrometallurgy", "smelting", "습식제련", "건식제련",
     "lfp", "lithium iron phosphate",
-    "gigafactory", "kwh", "mwh", "ev ", "electric vehicle", "전기차", "이차전지",
+    "gigafactory", "kwh", "mwh", "ev ", "electric vehicle", "전기차",
+    "ess", "energy storage", "에너지저장",
     "fastmarkets", "benchmark mineral", "s&p global", "smm",
     "sungeel", "성일", "ascend", "redwood", "cirba", "ecobat", "umicore", "glencore",
     "retriev", "battery resources", "interco", "princeton nuenergy",
     "is eco solution", "fortum", "stena",
-    "samsung", "sk온", "sk on", "lg에너지솔루션", "lg energy solution", "삼성sdi",
+    "sk온", "sk on", "lg에너지솔루션", "lg energy solution", "삼성sdi",
     "catl", "byd", "panasonic", "northvolt",
     "에코프로비엠", "에코프로", "포스코퓨처엠", "엘앤에프", "성일하이텍",
     "albemarle", "sqm", "ganfeng", "tianqi",
     "pilbara", "liontown", "arcadium", "sigma lithium",
-    "circular economy", "생산자책임", "drc cobalt", "kcc mine", "cobalt quota", "mhp payables",
-    # 인도네시아어: 니켈 제련 특화
-    "nikel", "rkef", "hpal", "ferronickel", "hilirisasi",
-    "akkumulátor", "akkuhulladék",
+    "circular economy", "생산자책임", "핵심광물", "critical mineral",
+    "nikel", "rkef", "ferronickel", "hilirisasi",
     "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
 ]
 
-# 인도네시아어 기사 strict 필터 (WHITELIST "nikel" 단독 통과 방지)
-_ID_NICKEL_STRICT = [
-    "nikel", "rkef", "hpal", "ferronickel", "nickel matte",
-    "hilirisasi nikel", "pemurnian nikel", "smelter nikel",
-    "nickel pig iron", "npi", "matte nikel",
-]
+# 중복 판정 제외 불용어
+_STOPWORDS = {
+    "the","a","an","to","in","of","on","for","and","or","as","at","by",
+    "is","are","be","was","were","it","its","with","from","that","this",
+    "has","have","will","not","new","up","down","over","out","after",
+    "안","및","등","것","수","위","더","이","그","저","중","해","때","약",
+}
 
 # ============================================================
 # 유틸
@@ -318,29 +266,42 @@ def parse_date(pub_str):
     try:
         from email.utils import parsedate_to_datetime
         return parsedate_to_datetime(pub_str).replace(tzinfo=None)
-    except:
+    except Exception:
         pass
     try:
         return datetime.fromisoformat(pub_str.replace('Z', '').replace('+00:00', ''))
-    except:
+    except Exception:
         return None
 
 def extract_real_url(url):
     if "google.com/url" in url:
-        match = re.search(r'[?&]url=([^&]+)', url)
-        if match:
-            return urllib.parse.unquote(match.group(1))
+        m = re.search(r'[?&]url=([^&]+)', url)
+        if m:
+            return urllib.parse.unquote(m.group(1))
     return url
 
+def _sig_words(title: str) -> set:
+    ws = re.sub(r'[^\w\s]', ' ', title.lower()).split()
+    return {w for w in ws if len(w) >= 2 and w not in _STOPWORDS}
+
 def get_cutoff_utc() -> datetime:
-    """KST 기준 '어제 00:00' → UTC 변환.
-    오늘이 5/19 KST → 5/18 00:00 KST = 5/17 15:00 UTC.
-    이 시각 이전 기사는 모두 제외.
-    """
-    kst_offset    = timedelta(hours=9)
-    _now_kst      = datetime.utcnow() + kst_offset
-    yesterday_kst = _now_kst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    return yesterday_kst - kst_offset
+    """평일: 어제 00:00 KST / 월요일: 3일 전 (주말 뉴스 포함)"""
+    kst_offset = timedelta(hours=9)
+    _now_kst   = datetime.utcnow() + kst_offset
+    back_days  = 3 if _now_kst.weekday() == 0 else 1
+    base_kst   = _now_kst.replace(hour=0, minute=0, second=0, microsecond=0) \
+                 - timedelta(days=back_days)
+    return base_kst - kst_offset
+
+def _fmt(val, prefix="") -> str:
+    if val is None:
+        return "—"
+    return f"{prefix}{val:,.0f}"
+
+def _pct_color(pct: str) -> str:
+    if not pct or pct == "N/A":
+        return "#888888"
+    return "#c0392b" if "+" in pct else "#2471a3"
 
 # ============================================================
 # SMM 시세 수집
@@ -379,77 +340,62 @@ async def _scrape_spot(page, target: dict) -> dict:
         cny_incl = float(cny_list[0].replace(",", "")) if cny_list else None
         cny_excl = round(cny_incl / VAT_RATE) if cny_incl else None
 
-        mc        = target.get("metal_content")
-        ml        = target.get("metal_label")
+        # 범위 검증 — 파싱 오류로 엉뚱한 값이 들어가는 것 방지
+        if usd_excl is not None and not (500 < usd_excl < 200_000):
+            return {**base, "status": f"ERROR: 범위 이탈 ({usd_excl})"}
+
+        mc, ml    = target.get("metal_content"), target.get("metal_label")
         usd_metal = round(usd_excl / mc) if (usd_excl and mc) else None
         cny_metal = round(cny_excl / mc) if (cny_excl and mc) else None
 
         return {
             **base,
             "date":          date_m.group(1) if date_m else "N/A",
-            "usd_excl":      usd_excl,
-            "cny_incl":      cny_incl,
-            "cny_excl":      cny_excl,
-            "usd_metal":     usd_metal,
-            "cny_metal":     cny_metal,
-            "metal_content": mc,
-            "metal_label":   ml,
-            "change_pct":    change_pct,
-            "status":        "OK",
+            "usd_excl":      usd_excl,  "cny_incl": cny_incl, "cny_excl": cny_excl,
+            "usd_metal":     usd_metal, "cny_metal": cny_metal,
+            "metal_content": mc, "metal_label": ml,
+            "change_pct":    change_pct, "status": "OK",
         }
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
 
 
-
-
+_LCM_JS = """
+() => {
+    const raw = (document.body ? document.body.innerText : '').replace(/[,]/g, '');
+    let price = null, pricePos = -1, pos = 0;
+    while (pos < raw.length) {
+        const m = raw.slice(pos).match(/\\b([1-3]\\d{5})\\b/);
+        if (!m) break;
+        const n = parseInt(m[1]);
+        if (n >= 100000 && n <= 300000) { price = n; pricePos = pos + m.index; break; }
+        pos += m.index + m[1].length;
+    }
+    if (price === null) return { price: null, pct: 'N/A' };
+    const win = raw.substring(Math.max(0, pricePos - 80), pricePos + 250);
+    const all = [...win.matchAll(/([+\\-]?\\d+\\.\\d+)\\s*%/g)];
+    for (const m2 of all) {
+        const v = parseFloat(m2[1]);
+        if (Math.abs(v) > 0 && Math.abs(v) < 25) {
+            return { price: price, pct: (v >= 0 ? '+' : '') + v.toFixed(2) + '%' };
+        }
+    }
+    return { price: price, pct: 'N/A' };
+}
+"""
 
 async def _scrape_lcm_playwright(page, target: dict) -> dict:
-    """www.metal.com/gfex — GFEX 탄산리튬 선물 주계약 수집.
-    가격(100000-300000) 주변 ±250자에서 소수점 포함 % 동시 추출 (JS only).
-    """
     display = f"{target['exchange']}·{target['ticker']}"
     base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
-
     try:
         await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(4000)
-
         try:
             await page.evaluate("window.stop()")
         except Exception:
             pass
 
-        # ── 가격 + 등락률 동시 추출 (JS only) ──────────────────
-        # 페이지 표시: 시세 | 등락값 | 등락률
-        # 가격(100000-300000) 주변 ±250자에서 소수점 포함 % 탐색
-        result = await page.evaluate("""
-            () => {
-                const raw = (document.body ? document.body.innerText : '')
-                            .replace(/[,]/g, '');
-                let price = null, pricePos = -1;
-                let pos = 0;
-                while (pos < raw.length) {
-                    const m = raw.slice(pos).match(/\\b([1-3]\\d{5})\\b/);
-                    if (!m) break;
-                    const n = parseInt(m[1]);
-                    if (n >= 100000 && n <= 300000) {
-                        price = n; pricePos = pos + m.index; break;
-                    }
-                    pos += m.index + m[1].length;
-                }
-                if (price === null) return { price: null, pct: 'N/A' };
-                const win = raw.substring(Math.max(0, pricePos - 80), pricePos + 250);
-                const all = [...win.matchAll(/([+\\-]?\\d+\\.\\d+)\\s*%/g)];
-                for (const m2 of all) {
-                    const v = parseFloat(m2[1]);
-                    if (Math.abs(v) > 0 && Math.abs(v) < 25) {
-                        return { price: price, pct: (v >= 0 ? '+' : '') + v.toFixed(2) + '%' };
-                    }
-                }
-                return { price: price, pct: 'N/A' };
-            }
-        """)
+        result     = await page.evaluate(_LCM_JS)
         price      = result.get("price") if result else None
         change_pct = result.get("pct", "N/A") if result else "N/A"
         print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
@@ -466,21 +412,12 @@ async def _scrape_lcm_playwright(page, target: dict) -> dict:
             }
     except Exception as e:
         print(f"  metal.com/gfex 오류: {e}")
-
     return {**base, "status": "ERROR: 가격 파싱 실패"}
-
 
 
 def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
                    existing_titles: list = None) -> list:
-    """SMM RSS 피드 기반 기사 수집.
-    https://rss.metal.com/news/the_latest.xml
-    <metal> 태그로 배터리/니켈 관련 1차 필터 → 키워드 2차 필터 → cutoff 날짜 필터
-    장점: pubDate 표준 제공, 개별 페이지 방문 불필요, 날짜 정확
-    """
     RSS_URL = "https://rss.metal.com/news/the_latest.xml"
-
-    # 배터리 재활용 관련 metal 카테고리
     RELEVANT_METALS = {
         "new energy", "lithium battery", "energy storage",
         "sodium battery", "nickel", "cobalt", "rare earth", "scrap metals",
@@ -493,19 +430,14 @@ def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
     existing_titles = existing_titles or []
 
     def _parse_pubdate(s: str):
-        """SMM pubDate 포맷: '12:00:53 Jun 08, 2026 ' → datetime"""
         try:
             return datetime.strptime(s.strip(), "%H:%M:%S %b %d, %Y")
         except Exception:
             return None
 
     def _title_dup(title: str) -> bool:
-        words_new = {w for w in re.sub(r"[^\w\s]", " ", title).split() if len(w) >= 3}
-        for t in existing_titles:
-            words_t = {w for w in re.sub(r"[^\w\s]", " ", t).split() if len(w) >= 3}
-            if len(words_new & words_t) >= 4:
-                return True
-        return False
+        wn = _sig_words(title)
+        return any(len(wn & _sig_words(t)) >= 4 for t in existing_titles)
 
     try:
         resp = requests.get(RSS_URL, timeout=15,
@@ -515,78 +447,62 @@ def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
             return []
 
         root = ET.fromstring(resp.content)
-        articles      = []
-        skipped_metal = 0
-        skipped_date  = 0
-        skipped_dup   = 0
+        articles = []
+        sk_metal = sk_date = sk_dup = 0
 
         for item in root.findall(".//item"):
-            # <metal> 태그로 1차 필터
             metal_el   = item.find("metal")
             metal_text = (metal_el.text or "").lower() if metal_el is not None else ""
             metals     = {m.strip() for m in metal_text.split(",")}
             if not (metals & RELEVANT_METALS):
-                skipped_metal += 1
+                sk_metal += 1
                 continue
 
-            # 제목 추출
             title_el = item.find("title")
             title    = (title_el.text or "").strip() if title_el is not None else ""
             if not title:
                 continue
 
-            # 날짜 파싱 — RSS는 pubDate 정확
-            # SMM pubDate는 CST(UTC+8) 기준이나 timezone 없이 파싱됨
-            # cutoff 비교 시 8시간 여유를 줘서 오전 기사 누락 방지
             pub_el   = item.find("pubDate")
             pub_str  = (pub_el.text or "").strip() if pub_el is not None else ""
             pub_date = _parse_pubdate(pub_str)
             if pub_date is None:
-                skipped_date += 1
+                sk_date += 1
                 continue
             smm_cutoff = (cutoff - timedelta(hours=8)) if cutoff else None
             if smm_cutoff and pub_date < smm_cutoff:
-                skipped_date += 1
+                sk_date += 1
                 continue
 
-            # 링크 추출
             link_el = item.find("link")
             link    = (link_el.text or "").strip() if link_el is not None else ""
             if not link:
                 continue
 
-            # 스니펫 (description)
             desc_el = item.find("description")
             snippet = (desc_el.text or "").strip()[:400] if desc_el is not None else ""
 
-            # 키워드 2차 필터 (제목+스니펫)
             combined = (title + " " + snippet).lower()
             if not any(k in combined for k in SMM_KEYWORDS):
-                skipped_metal += 1
+                sk_metal += 1
                 continue
 
-            # 중복 체크
             if _title_dup(title):
-                skipped_dup += 1
+                sk_dup += 1
                 continue
 
             articles.append({
-                "title":    title,
-                "link":     link,
-                "snippet":  snippet,
-                "source":   "SMM Metal",
-                "priority": False,
-                "pub_date": pub_date,
-                "pub":      pub_date.strftime("%Y-%m-%d"),
-                "lang":     "en",
+                "title": title, "link": link, "snippet": snippet,
+                "source": "SMM Metal", "priority": False,
+                "pub_date": pub_date, "pub": pub_date.strftime("%Y-%m-%d"),
+                "lang": "en",
             })
             existing_titles.append(title)
             if len(articles) >= max_fetch:
                 break
 
-        print(f"  SMM RSS: {len(articles)}건 (관련도제외:{skipped_metal} / 날짜제외:{skipped_date} / 중복:{skipped_dup})")
+        print(f"  SMM RSS: {len(articles)}건 (제외 {sk_metal}/{sk_date}/{sk_dup})")
         return articles
-
     except Exception as e:
         print(f"  SMM RSS 오류: {e}")
         return []
@@ -612,22 +528,18 @@ def _fetch_westmetall_ni3m() -> dict:
 
         def p(s): return float(s.replace(",", ""))
 
-        date_t1  = rows[0][0].strip()
-        cash_t1  = p(rows[0][1]);  cash_t2 = p(rows[1][1])
-        m3_t1    = p(rows[0][2]);  m3_t2   = p(rows[1][2])
+        date_t1 = rows[0][0].strip()
+        cash_t1, cash_t2 = p(rows[0][1]), p(rows[1][1])
+        m3_t1,   m3_t2   = p(rows[0][2]), p(rows[1][2])
 
         if not (10_000 < cash_t1 < 30_000 and 10_000 < m3_t1 < 30_000):
             return {}
 
         cash_pct = (cash_t1 - cash_t2) / cash_t2 * 100
-        m3_pct   = (m3_t1   - m3_t2)   / m3_t2   * 100
-        print(f"  westmetall Cash: ${cash_t1:,.0f} ({cash_pct:+.2f}%)  3M: ${m3_t1:,.0f} ({m3_pct:+.2f}%)")
-        return {
-            "cash":     cash_t1,  "cash_pct": f"{cash_pct:+.2f}%",
-            "m3":       m3_t1,    "m3_pct":   f"{m3_pct:+.2f}%",
-            "date":     date_t1,
-        }
-
+        m3_pct   = (m3_t1 - m3_t2) / m3_t2 * 100
+        print(f"  westmetall Cash ${cash_t1:,.0f} ({cash_pct:+.2f}%) 3M ${m3_t1:,.0f}")
+        return {"cash": cash_t1, "cash_pct": f"{cash_pct:+.2f}%",
+                "m3": m3_t1, "m3_pct": f"{m3_pct:+.2f}%", "date": date_t1}
     except Exception as e:
         print(f"  westmetall 오류: {e}")
         return {}
@@ -637,14 +549,11 @@ async def _scrape_metalradar_ni3m(page) -> dict:
     result = _fetch_westmetall_ni3m()
     if result:
         return result
-
-    print("  westmetall 실패 → metalradar.com 시도...")
+    print("  westmetall 실패 → metalradar 시도...")
     try:
         await page.goto(
             "https://metalradar.com/price/nickel/lme/official/3-month/cumulative-volume?includeOrigin=true",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
+            wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_timeout(6000)
         body  = await page.inner_text("body")
         m_ask = re.search(r'Ask\s*\$?([\d,]+\.?\d*)', body)
@@ -653,10 +562,9 @@ async def _scrape_metalradar_ni3m(page) -> dict:
         ask = float(m_ask.group(1).replace(",", ""))
         if not (15_000 < ask < 25_000):
             return {}
-        print(f"  metalradar 3M: ${ask:,.0f} (pct=N/A)")
         return {"m3": ask, "m3_pct": "N/A", "date": now_kst().strftime("%d. %b %Y")}
     except Exception as e:
-        print(f"  metalradar 3M 오류: {e}")
+        print(f"  metalradar 오류: {e}")
         return {}
 
 
@@ -664,19 +572,14 @@ def _fetch_lme_nickel_kpi() -> dict:
     try:
         r = requests.get(
             "https://www.kpi.or.kr/www/contents/lme.asp?CFG_CD=con_09",
-            headers={
-                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept":          "text/html,*/*;q=0.8",
-                "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-            },
-            timeout=10,
-        )
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                     "Accept": "text/html,*/*;q=0.8",
+                     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"},
+            timeout=10)
         r.encoding = "euc-kr"
         for row in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.DOTALL):
-            cells = [
-                re.sub(r"<[^>]+>", "", c).strip()
-                for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-            ]
+            cells = [re.sub(r"<[^>]+>", "", c).strip()
+                     for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)]
             cells = [c for c in cells if c]
             if not any("니켈" in c or "(Ni)" in c for c in cells):
                 continue
@@ -691,12 +594,11 @@ def _fetch_lme_nickel_kpi() -> dict:
                     except ValueError:
                         pass
             if len(nums) >= 2:
-                cash, cash_prev = nums[0], nums[1]
-                pct = (cash - cash_prev) / cash_prev * 100
-                return {"cash": cash, "cash_pct": f"{pct:+.2f}%",
+                cash, prev = nums[0], nums[1]
+                return {"cash": cash, "cash_pct": f"{(cash-prev)/prev*100:+.2f}%",
                         "date": now_kst().strftime("%d. %b %Y")}
     except Exception as e:
-        print(f"  LME 니켈 오류 (kpi.or.kr): {e}")
+        print(f"  LME 니켈 오류(kpi): {e}")
     return {}
 
 
@@ -709,17 +611,15 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     if wm:
         lme_ni        = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
         ni3m_prefetch = wm
-        print(f"OK (westmetall) ${wm['cash']:,.0f} ({wm['cash_pct']})")
+        print("OK (westmetall)")
     else:
         lme_ni        = _fetch_lme_nickel_kpi()
         ni3m_prefetch = None
-        print(f"OK (kpi) ${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "W 실패")
+        print("OK (kpi)" if lme_ni else "W 실패")
 
     CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-    BROWSER_UA    = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
+    BROWSER_UA    = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
@@ -734,74 +634,53 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
 
             if t["name"] == "황산코발트":
                 if lme_ni:
-                    ni_entry = {
-                        "name":          "니켈",
-                        "name_en":       "LME Nickel",
-                        "source":        "LME",
-                        "date":          lme_ni["date"],
-                        "usd_excl":      lme_ni["cash"],
-                        "cny_incl":      None,
-                        "cny_excl":      round(lme_ni["cash"] * usd_cny),
-                        "usd_metal":     None,
-                        "cny_metal":     None,
-                        "metal_content": None,
-                        "metal_label":   None,
-                        "change_pct":    lme_ni["cash_pct"],
-                        "delayed":       True,
-                        "status":        "OK",
-                    }
+                    spot_results.append({
+                        "name": "니켈", "name_en": "LME Nickel", "source": "LME",
+                        "date": lme_ni["date"], "usd_excl": lme_ni["cash"],
+                        "cny_incl": None, "cny_excl": round(lme_ni["cash"] * usd_cny),
+                        "usd_metal": None, "cny_metal": None,
+                        "metal_content": None, "metal_label": None,
+                        "change_pct": lme_ni["cash_pct"], "delayed": True, "status": "OK",
+                    })
                 else:
-                    ni_entry = {"name": "니켈", "name_en": "LME Nickel",
-                                "source": "LME", "status": "ERROR: 수집 실패"}
-                spot_results.append(ni_entry)
-                status_str = f"${lme_ni['cash']:,.0f} ({lme_ni['cash_pct']})" if lme_ni else "ERROR"
-                print(f"  현물: 니켈(LME) ... {status_str}")
-
+                    spot_results.append({"name": "니켈", "name_en": "LME Nickel",
+                                         "source": "LME", "status": "ERROR: 수집 실패"})
             await asyncio.sleep(2)
 
         if ni3m_prefetch:
             ni3m = ni3m_prefetch
-            print(f"  LME 3M: ${ni3m['m3']:,.0f} ({ni3m['m3_pct']}) ← westmetall")
         else:
-            print("  LME 3M 수집 중 (metalradar.com)...", end=" ", flush=True)
+            print("  LME 3M 수집 중...", end=" ", flush=True)
             ni3m = await _scrape_metalradar_ni3m(page)
         if not ni3m:
-            print("W 실패")
+            print("W 3M 실패")
 
         for t in FUTURES_EM:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
             if t.get("method") == "playwright":
                 r = await _scrape_lcm_playwright(page, t)
                 futures_results.append(r)
-                print(f"OK ({r.get('ticker','?')})" if r["status"] == "OK" else f"W {r['status']}")
+                print("OK" if r["status"] == "OK" else f"W {r['status']}")
                 try:
                     await asyncio.wait_for(browser.close(), timeout=8.0)
-                except (asyncio.TimeoutError, Exception):
+                except Exception:
                     pass
                 browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
                 ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
                 page    = await ctx.new_page()
             elif t.get("method") == "metalradar":
                 if ni3m:
-                    r = {
-                        "name":            t["name"],
-                        "exchange":        "LME",
-                        "ticker":          "LME·3M",
-                        "source":          "metalradar.com",
-                        "date":            ni3m["date"],
-                        "latest":          round(ni3m["m3"]),
-                        "latest_vat_excl": round(ni3m["m3"] * usd_cny),
-                        "change_pct":      ni3m["m3_pct"],
-                        "delayed":         True,
-                        "status":          "OK",
-                    }
-                    print(f"OK (3M ${ni3m['m3']:,.0f})")
+                    r = {"name": t["name"], "exchange": "LME", "ticker": "LME·3M",
+                         "source": "metalradar.com", "date": ni3m["date"],
+                         "latest": round(ni3m["m3"]),
+                         "latest_vat_excl": round(ni3m["m3"] * usd_cny),
+                         "change_pct": ni3m["m3_pct"], "delayed": True, "status": "OK"}
+                    print("OK")
                 else:
-                    r = {"name": t["name"], "exchange": "LME",
-                         "ticker": "LME·3M", "status": "ERROR: 수집 실패"}
+                    r = {"name": t["name"], "exchange": "LME", "ticker": "LME·3M",
+                         "status": "ERROR: 수집 실패"}
                     print("W 실패")
                 futures_results.append(r)
-
 
         await browser.close()
 
@@ -809,84 +688,107 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
 
 
 def compute_spreads(price_data: dict) -> dict:
-    spot_map    = {r["name"]: r for r in price_data["spot"]    if r["status"] == "OK"}
-    futures_map = {r["exchange"]: r for r in price_data["futures"] if r["status"] == "OK"}
+    spot_map    = {r["name"]: r for r in price_data["spot"] if r.get("status") == "OK"}
+    futures_map = {r["exchange"]: r for r in price_data["futures"] if r.get("status") == "OK"}
     spreads     = {}
 
     lc_data = futures_map.get("GFEX", {})
     lc_s    = spot_map.get("공업용 탄산리튬", {}).get("cny_excl")
     lc_f    = lc_data.get("latest_vat_excl")
-    lc_tick = lc_data.get("ticker", "GFEX·LC????").split("·")[-1]
     if lc_s and lc_f:
         diff = lc_s - lc_f
         spreads["탄산리튬"] = {
-            "spot": lc_s, "futures": lc_f, "ticker": lc_tick,
+            "spot": lc_s, "futures": lc_f,
+            "ticker": lc_data.get("ticker", "GFEX·LC").split("·")[-1],
             "spread": diff, "spread_pct": diff / lc_f * 100,
-            "structure": "백워데이션" if diff > 0 else "콘탱고",
-        }
+            "structure": "백워데이션" if diff > 0 else "콘탱고"}
 
-    ni_data   = futures_map.get("LME", {})
-    ni_spot_r = spot_map.get("니켈", {})
-    ni_s      = ni_spot_r.get("usd_excl")
-    ni_f      = ni_data.get("latest")
+    ni_f = futures_map.get("LME", {}).get("latest")
+    ni_s = spot_map.get("니켈", {}).get("usd_excl")
     if ni_s and ni_f:
         diff = ni_s - ni_f
         spreads["니켈"] = {
             "spot_metal": ni_s, "futures": ni_f, "ticker": "3M",
             "spread": diff, "spread_pct": diff / ni_f * 100,
-            "structure": "백워데이션" if diff > 0 else "콘탱고",
-            "unit": "USD",
-        }
+            "structure": "백워데이션" if diff > 0 else "콘탱고", "unit": "USD"}
 
     return spreads
 
 
 def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> str:
     lines = [f"수집: {now_kst().strftime('%H:%M')} KST | USD/CNY: {usd_cny:.2f}"]
-
     lines.append("\n[현물 - 증치세제외 기준]")
     for r in price_data["spot"]:
-        if r["status"] != "OK":
+        if r.get("status") != "OK":
             continue
-        metal_str = ""
+        ms = ""
         if r.get("usd_metal"):
-            metal_str = f" | {r['metal_label']}금속환산: ${r['usd_metal']:,.0f} / CNY{r['cny_metal']:,.0f}"
-        lines.append(
-            f"  {r['name']}: ${r['usd_excl']:,.0f}/t{metal_str}"
-            f" | CNY{r['cny_excl']:,.0f}(제외) | {r['change_pct']}"
-        )
+            ms = f" | {r['metal_label']}금속환산: ${r['usd_metal']:,.0f}"
+        lines.append(f"  {r['name']}: ${r['usd_excl']:,.0f}/t{ms}"
+                     f" | CNY{r.get('cny_excl') or 0:,.0f} | {r['change_pct']}")
 
     lines.append("\n[선물 - 증치세제외 환산]")
     for r in price_data["futures"]:
-        if r["status"] != "OK":
+        if r.get("status") != "OK":
             continue
         ve = r.get("latest_vat_excl")
         ue = round(ve / usd_cny) if ve else None
-        lines.append(
-            f"  {r['name']}({r.get('ticker','')}): ${ue:,.0f} / CNY{ve:,.0f}"
-            f" | 고시가CNY{r.get('latest', 0):,.0f}(포함) | {r['change_pct']}"
-        )
+        lines.append(f"  {r['name']}({r.get('ticker','')}): ${ue:,.0f} / CNY{ve:,.0f}"
+                     f" | {r['change_pct']}")
 
     lines.append("\n[현선물 스프레드]")
     if "탄산리튬" in spreads:
         s = spreads["탄산리튬"]
-        lines.append(
-            f"  탄산리튬({s['ticker']}): 현물CNY{s['spot']:,.0f} vs 선물CNY{s['futures']:,.0f}"
-            f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%)"
-        )
+        lines.append(f"  탄산리튬({s['ticker']}): 현물CNY{s['spot']:,.0f} vs 선물CNY{s['futures']:,.0f}"
+                     f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%)")
     if "니켈" in spreads:
         s = spreads["니켈"]
-        lines.append(
-            f"  니켈LME({s['ticker']}): Cash${s['spot_metal']:,.0f} vs 3M${s['futures']:,.0f}"
-            f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%) [T-1]"
-        )
-
+        lines.append(f"  니켈LME(3M): Cash${s['spot_metal']:,.0f} vs 3M${s['futures']:,.0f}"
+                     f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%) [T-1]")
     return "\n".join(lines)
 
+
+def append_price_history(price_data: dict, usd_cny: float) -> list:
+    """당일 시세를 JSON에 누적하고 전체 이력 반환"""
+    os.makedirs(os.path.dirname(PRICE_JSON), exist_ok=True)
+    hist = []
+    if os.path.exists(PRICE_JSON):
+        try:
+            with open(PRICE_JSON, encoding="utf-8") as f:
+                hist = json.load(f)
+        except Exception as e:
+            print(f"  시세 이력 읽기 실패({e}) - 새로 시작")
+
+    spot = {r["name"]: r for r in (price_data or {}).get("spot", [])
+            if r.get("status") == "OK"}
+    fut  = {r["exchange"]: r for r in (price_data or {}).get("futures", [])
+            if r.get("status") == "OK"}
+
+    lc_ve = fut.get("GFEX", {}).get("latest_vat_excl")
+    row = {
+        "date":     now_kst().strftime("%Y-%m-%d"),
+        "usd_cny":  round(usd_cny, 4),
+        "ni":       spot.get("니켈", {}).get("usd_excl"),
+        "ni_3m":    fut.get("LME", {}).get("latest"),
+        "co":       spot.get("황산코발트", {}).get("usd_excl"),
+        "co_metal": spot.get("황산코발트", {}).get("usd_metal"),
+        "li_ind":   spot.get("공업용 탄산리튬", {}).get("usd_excl"),
+        "li_bat":   spot.get("배터리용 탄산리튬", {}).get("usd_excl"),
+        "lc_fut":   round(lc_ve / usd_cny) if lc_ve else None,
+    }
+
+    hist = [h for h in hist if h.get("date") != row["date"]]
+    hist.append(row)
+    hist.sort(key=lambda x: x["date"])
+
+    with open(PRICE_JSON, "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False, indent=1)
+    print(f"  시세 이력 저장: {len(hist)}일치")
+    return hist
+
 # ============================================================
-# pre-clustering — collect_rss() 위에 위치
+# 기사 수집
 # ============================================================
-# 크로스 언어 클러스터링용 회사명 목록
 _CROSS_LANG_COMPANIES = [
     "sqm", "albemarle", "ganfeng", "tianqi", "pilbara", "liontown",
     "arcadium", "sigma lithium", "glencore", "umicore", "northvolt",
@@ -895,19 +797,14 @@ _CROSS_LANG_COMPANIES = [
 ]
 
 def _pre_cluster_articles(articles: list) -> list:
-    """동일 이슈 기사 사전 클러스터링.
-    - 같은 언어: 제목 단어 5개 이상 겹치면 body 긴 1건 유지
-    - 다국어: 동일 회사명 + 핵심 숫자(%) 겹치면 1건으로 통합 (SQM 3건 중복 방지)
-    """
     kept = []
 
     def _key_numbers(title: str) -> set:
-        """제목에서 핵심 숫자/% 추출"""
         return set(re.findall(r'\d+\.?\d*%|\$[\d,]+[BMK]?|\d{2,}', title))
 
     for a in articles:
         lang_a  = a.get("lang", "")
-        words_a = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
+        words_a = _sig_words(a["title"])
         nums_a  = _key_numbers(a["title"])
         lt_a    = a["title"].lower()
         len_a   = len(a.get("body", "") or a.get("snippet", ""))
@@ -915,21 +812,18 @@ def _pre_cluster_articles(articles: list) -> list:
         merged = False
         for i, b in enumerate(kept):
             lt_b    = b["title"].lower()
-            words_b = {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}
+            words_b = _sig_words(b["title"])
             len_b   = len(b.get("body", "") or b.get("snippet", ""))
 
-            # 같은 언어: 단어 5개 이상 겹치면 통합
             if b.get("lang", "") == lang_a and len(words_a & words_b) >= 5:
                 if len_a > len_b:
                     kept[i] = a
                 merged = True
                 break
 
-            # 다국어 크로스: 동일 회사 + 핵심 숫자 겹치면 통합
             nums_b = _key_numbers(b["title"])
             if nums_a and nums_b and len(nums_a & nums_b) >= 2:
-                co_match = any(co in lt_a and co in lt_b for co in _CROSS_LANG_COMPANIES)
-                if co_match:
+                if any(co in lt_a and co in lt_b for co in _CROSS_LANG_COMPANIES):
                     if len_a > len_b:
                         kept[i] = a
                     merged = True
@@ -940,114 +834,117 @@ def _pre_cluster_articles(articles: list) -> list:
 
     removed = len(articles) - len(kept)
     if removed > 0:
-        print(f"  pre-clustering: {removed}건 통합 → {len(kept)}건 유지")
+        print(f"  pre-clustering: {removed}건 통합 → {len(kept)}건")
     return kept
 
-# ============================================================
-# RSS 수집
-# ============================================================
-def collect_rss():
-    now    = datetime.utcnow()
 
-    # KST 어제 자정 기준 cutoff (UTC)
-    cutoff     = get_cutoff_utc()
-    cutoff_kst = cutoff + timedelta(hours=9)
-    print(f"  [날짜 필터] {cutoff_kst.strftime('%Y-%m-%d %H:%M')} KST 이후 기사만 수집")
+def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
+                is_special: bool = False, cutoff: datetime = None,
+                seen: set = None, max_items: int = 40) -> list:
+    """RSS 피드 하나를 읽어 기사 리스트 반환"""
+    out = []
+    try:
+        resp = requests.get(url, timeout=20,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        if resp.status_code != 200:
+            print(f"  [{source_fixed or url[:40]}] HTTP {resp.status_code}")
+            return out
+        root = ET.fromstring(resp.content)
 
-    raw  = []
-    seen = set()
-
-    for item in QUERIES:
-        is_priority = item.get("priority", False)
-
-        try:
-            q   = item["q"] + " when:2d"
-            url = (f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}"
-                   f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}&num=10"
-                   f"&cb={int(now.timestamp())}")
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code != 200:
+        for entry in root.findall(".//item")[:max_items]:
+            title = decode_entities((entry.findtext("title") or "").strip())
+            link  = extract_real_url((entry.findtext("link") or "").strip())
+            if not title or not link or (seen is not None and link in seen):
                 continue
-            root = ET.fromstring(resp.content)
 
-            for entry in root.findall(".//item"):
-                title     = decode_entities((entry.findtext("title") or "").strip())
-                link      = (entry.findtext("link") or "").strip()
-                link      = extract_real_url(link)
-                pub_str   = (entry.findtext("pubDate") or "").strip()
-                source_el = entry.find("source")
-                source    = source_el.text.strip() if source_el is not None else ""
-                # ★ source 태그의 url 속성도 체크 (Google News 우회 방지)
-                source_url = (source_el.get("url", "") or "").lower() if source_el is not None else ""
-                snippet   = decode_entities(
-                    re.sub(r'<[^>]+>', '', entry.findtext("description") or "")
-                )[:200]
+            pub_date = parse_date((entry.findtext("pubDate") or "").strip())
+            if not pub_date or (cutoff and pub_date < cutoff):
+                continue
 
-                if not title or not link or link in seen:
-                    continue
+            snippet = decode_entities(
+                re.sub(r'<[^>]+>', '', entry.findtext("description") or ""))[:400]
 
-                pub_date = parse_date(pub_str)
-
-                # KST 어제 자정 이전 기사 제외 (날짜 불명 기사도 제외)
-                if not pub_date or pub_date < cutoff:
-                    continue
-
+            if source_fixed:
+                source = source_fixed
+            else:
+                src_el = entry.find("source")
+                source = src_el.text.strip() if src_el is not None else ""
                 if "metal.com" in link.lower():
                     source = "SMM Metal"
 
-                lt = title.lower()
-                ls = source.lower()
-                ll = link.lower()
+            lt, ls, ll = title.lower(), source.lower(), link.lower()
 
-                if any(s in ls or s in ll or s in source_url for s in NOISE_SOURCES):
-                    continue
-                if any(p in ll for p in NOISE_URL_PATHS):
-                    continue
-                if any(k in lt for k in NOISE_KEYWORDS):
-                    continue
-                if any(a in lt and b in lt for a, b in NOISE_PAIRS):
-                    continue
-                if is_stock_noise(title):
-                    continue
-                if source != "SMM Metal":
-                    if not any(w in lt for w in WHITELIST):
-                        continue
+            if any(k in lt for k in NOISE_KEYWORDS):              continue
+            if any(x in lt and y in lt for x, y in NOISE_PAIRS):  continue
+            if is_stock_noise(title):                             continue
 
-                # 인도네시아어 strict 필터
-                if item.get("lang") == "id":
-                    if not any(k in lt for k in _ID_NICKEL_STRICT):
-                        continue
+            if not is_special:
+                if any(s in ls or s in ll for s in NOISE_SOURCES): continue
+                if any(p in ll for p in NOISE_URL_PATHS):          continue
+                combined = (title + " " + snippet).lower()
+                if not any(w in combined for w in WHITELIST):
+                    continue
 
+            if seen is not None:
                 seen.add(link)
-                raw.append({
-                    "title":    title,
-                    "link":     link,
-                    "source":   source,
-                    "pub":      pub_str,
-                    "pub_date": pub_date,
-                    "lang":     item.get("lang", "en"),
-                    "snippet":  snippet,
-                    "priority": is_priority,
-                })
+            out.append({
+                "title": title, "link": link, "source": source,
+                "pub": (entry.findtext("pubDate") or "").strip(),
+                "pub_date": pub_date, "lang": lang,
+                "snippet": snippet, "priority": is_special,
+            })
+    except Exception as e:
+        print(f"  [{source_fixed or url[:40]}] 오류: {e}")
+    return out
 
-            time.sleep(0.12)
-        except Exception as e:
-            print(f"RSS 오류: {e}")
+
+def collect_rss():
+    now        = datetime.utcnow()
+    cutoff     = get_cutoff_utc()
+    cutoff_kst = cutoff + timedelta(hours=9)
+    print(f"  [날짜 필터] {cutoff_kst.strftime('%Y-%m-%d %H:%M')} KST 이후")
+
+    raw, seen = [], set()
+
+    print("\n[전문 매체 수집]")
+    for f in PUBLISHER_FEEDS_SPECIAL:
+        got = _parse_feed(f["url"], f["source"], f["lang"],
+                          is_special=True, cutoff=cutoff, seen=seen)
+        print(f"  {f['source']}: {len(got)}건")
+        raw += got
+        time.sleep(0.2)
+
+    for f in PUBLISHER_FEEDS_GENERAL:
+        got = _parse_feed(f["url"], f["source"], f["lang"],
+                          is_special=False, cutoff=cutoff, seen=seen)
+        print(f"  {f['source']}: {len(got)}건")
+        raw += got
+        time.sleep(0.2)
+
+    print("\n[구글 뉴스 수집]")
+    g_total = 0
+    for item in GOOGLE_FEEDS:
+        q   = urllib.parse.quote(item["q"] + " when:3d")
+        url = (f"https://news.google.com/rss/search?q={q}"
+               f"&hl={item['lang']}&gl={item['gl']}&ceid={item['ceid']}"
+               f"&num=50&cb={int(now.timestamp())}")
+        got = _parse_feed(url, None, item["lang"],
+                          is_special=False, cutoff=cutoff, seen=seen, max_items=50)
+        g_total += len(got)
+        raw += got
+        time.sleep(0.15)
+    print(f"  구글 뉴스 합계: {g_total}건")
 
     raw.sort(key=lambda x: x.get("pub_date") or datetime.min, reverse=True)
 
-    company_day_count = {}
-    deduped = []
+    company_day_count, deduped = {}, []
     for a in raw:
+        words = _sig_words(a["title"])
+        if any(len(words & _sig_words(b["title"])) >= 5 for b in deduped):
+            continue
         tl      = a["title"].lower()
         pub_day = a["pub_date"].strftime("%Y-%m-%d") if a.get("pub_date") else "unknown"
-        words   = {w for w in re.sub(r'[^\w\s]', ' ', a["title"]).split() if len(w) >= 2}
-        is_dup  = any(
-            len(words & {w for w in re.sub(r'[^\w\s]', ' ', b["title"]).split() if len(w) >= 2}) >= 3
-            for b in deduped
-        )
-        if is_dup:
-            continue
+        is_dup  = False
         for co in ["lg에너지솔루션", "sk온", "삼성sdi", "에코프로비엠", "catl", "byd"]:
             if co in tl:
                 k = f"{co}_{pub_day}"
@@ -1058,132 +955,99 @@ def collect_rss():
         if not is_dup:
             deduped.append(a)
 
-    # SMM 직접 수집 — existing_titles 전달로 title dedup 적용
-    existing_titles_for_smm = [a["title"] for a in deduped]
-    smm_direct = _fetch_smm_rss(cutoff=cutoff, existing_titles=existing_titles_for_smm)
+    smm_direct = _fetch_smm_rss(cutoff=cutoff,
+                                existing_titles=[a["title"] for a in deduped])
     for a in smm_direct:
         if not any(a["link"] == x.get("link") for x in deduped):
             deduped.append(a)
 
-    # pre-clustering: 동일 이슈 기사 Python 레벨 통합
     deduped = _pre_cluster_articles(deduped)
 
     sc = sum(1 for a in deduped if "SMM" in a.get("source", ""))
     pc = sum(1 for a in deduped if a.get("priority"))
-    print(f"수집: {len(raw)}건 -> 클러스터링후: {len(deduped)}건 (SMM:{sc}건, 시황매체:{pc}건)")
+    print(f"\n수집: {len(raw)}건 → 최종 {len(deduped)}건 (SMM:{sc} / 전문지:{pc})")
     return deduped
 
 # ============================================================
-# Jina 본문 추출
+# 본문 추출
 # ============================================================
 def fetch_body(real_url):
     try:
-        resp = requests.get(
-            f"https://r.jina.ai/{real_url}",
-            timeout=(10, 45),
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = requests.get(f"https://r.jina.ai/{real_url}",
+                            timeout=(10, 45), headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.text[:3000]
     except Exception as e:
         print(f"Jina 오류: {e}")
     return ""
 
+
 async def get_real_url(page, cbm_url):
     try:
         await page.goto(cbm_url, wait_until="commit", timeout=15000)
     except Exception:
         pass
-
     try:
-        await page.wait_for_url(
-            lambda url: "news.google.com" not in url, timeout=10000)
-    except:
+        await page.wait_for_url(lambda url: "news.google.com" not in url, timeout=10000)
+    except Exception:
         pass
-
     final_url = page.url
-    if "news.google.com" not in final_url:
-        return final_url
-    return None
+    return final_url if "news.google.com" not in final_url else None
 
-# ============================================================
-# 본문 수집
-# ============================================================
-_BATTERY_RELEVANCE_KW = [
-    "battery", "배터리", "recycl", "재활용", "black mass", "블랙매스",
-    "lithium", "리튬", "nickel", "니켈", "cobalt", "코발트",
-    "cathode", "양극재", "precursor", "전구체",
-    "황산니켈", "황산코발트", "탄산리튬", "수산화리튬",
-    "nickel sulfate", "cobalt sulfate", "lithium carbonate",
-    "hpal", "hydromet", "lfp", "ev ", "electric vehicle",
-    "gigafactory", "feedstock", "scrap",
-    "nickel ore", "nikel", "tambang",
-    "电池", "回收", "锂", "镍", "钴", "akkumulátor",
+
+_VC_KW = [
+    "이차전지", "전기차", "배터리 재활용", "폐배터리", "사용후배터리", "블랙매스",
+    "battery recycl", "ev recycl", "black mass", "hydromet", "hpal",
+    "sk온", "lg에너지솔루션", "삼성sdi", "sk on", "lg energy solution", "samsung sdi",
+    "양극재", "전구체", "에코프로비엠", "포스코퓨처엠", "엘앤에프",
 ]
 
-def is_battery_relevant(title: str) -> bool:
-    return any(k in title.lower() for k in _BATTERY_RELEVANCE_KW)
+TARGET_TOTAL   = 25   # 본문 추출 총 건수
+SPECIAL_QUOTA  = 8    # 전문지 확보 칸
 
 async def enrich_articles(articles):
-    smm = [a for a in articles if "SMM" in a.get("source", "")][:3]
-    sk  = ["성일하이텍", "sungeel", "성일"]
+    smm     = [a for a in articles if "SMM" in a.get("source", "")][:3]
+    sk      = ["성일하이텍", "sungeel", "성일"]
     sungeel = [a for a in articles
                if "SMM" not in a.get("source", "")
                and any(k in a["title"].lower() for k in sk)]
-    priority = [a for a in articles
-                if a.get("priority") and "SMM" not in a.get("source", "")
-                and a not in sungeel
-                and is_battery_relevant(a["title"])][:3]
-    general_pool = [a for a in articles
-                    if "SMM" not in a.get("source", "")
-                    and a not in sungeel and a not in priority]
+    special = [a for a in articles
+               if a.get("priority") and a not in sungeel][:SPECIAL_QUOTA]
 
-    # 밸류체인 boost: 재활용 직접 언급 없어도 성일 사업과 직결
-    # - 국내 배터리셀 3사(SK온·LG에너지솔루션·삼성SDI) → 폐배터리 공급처(업스트림)
-    # - 이차전지·전기차 시장 → 폐배터리 발생량 결정하는 수요 지표
-    # - 양극재·전구체 업체 → 성일 제품(황산니켈·황산코발트) 수요처(다운스트림)
-    _VC_KW = [
-        "이차전지", "전기차", "배터리 재활용", "폐배터리", "사용후배터리", "블랙매스",
-        "battery recycl", "ev recycl", "black mass", "hydromet", "hpal", "이차전지 재활용",
-        "sk온", "lg에너지솔루션", "삼성sdi", "sk on", "lg energy solution", "samsung sdi",
-        "양극재", "전구체", "에코프로비엠", "포스코퓨처엠", "엘앤에프",
-    ]
-    vc_boost   = [a for a in general_pool if any(k in a["title"].lower() for k in _VC_KW)]
-    others     = [a for a in general_pool if a not in vc_boost]
-    general    = (vc_boost + others)[:max(0, 15 - len(sungeel) - len(priority))]
-    targets    = smm + sungeel + priority + general
+    pool     = [a for a in articles if "SMM" not in a.get("source", "")
+                and a not in sungeel and a not in special]
+    vc_boost = [a for a in pool if any(k in a["title"].lower() for k in _VC_KW)]
+    others   = [a for a in pool if a not in vc_boost]
 
-    vc_ko = sum(1 for a in vc_boost if a.get("lang") == "ko")
-    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+시황{len(priority)}+밸류체인{len(vc_boost)}(한국어{vc_ko}건)+기타{len(others[:max(0,15-len(sungeel)-len(priority)-len(vc_boost))])}={len(targets)}건")
+    remain  = max(0, TARGET_TOTAL - len(smm) - len(sungeel) - len(special))
+    general = (vc_boost + others)[:remain]
+    targets = smm + sungeel + special + general
+
+    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+전문지{len(special)}"
+          f"+일반{len(general)}={len(targets)}건")
 
     browser = None
     async with async_playwright() as p:
         try:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-            )
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
             page = await browser.new_page()
             await page.set_extra_http_headers({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
-            body_success = 0
-            body_snippet = 0
-
+            ok = sn = 0
             for i, article in enumerate(targets):
                 print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
                 link = article["link"]
 
-                if "SMM" in article.get("source", "") or "news.google.com" not in link:
+                if "news.google.com" not in link:
                     body = fetch_body(link)
                     if body:
-                        article["body"] = body
-                        body_success += 1
-                        print(f"  OK Jina ({len(body)}자)")
+                        article["body"] = body; ok += 1
+                        print(f"  OK ({len(body)}자)")
                     else:
-                        body_snippet += 1
-                        print("  W 스니펫 사용")
+                        sn += 1; print("  W 스니펫")
                     continue
 
                 real_url = await get_real_url(page, link)
@@ -1192,16 +1056,13 @@ async def enrich_articles(articles):
                     body = fetch_body(real_url)
                     article["body"] = body
                     if body:
-                        body_success += 1
-                        print(f"  OK {real_url[:65]} ({len(body)}자)")
+                        ok += 1; print(f"  OK {real_url[:60]}")
                     else:
-                        body_snippet += 1
-                        print("  W 본문없음 스니펫")
+                        sn += 1; print("  W 본문없음")
                 else:
-                    body_snippet += 1
-                    print("  W 리다이렉트 실패 스니펫")
+                    sn += 1; print("  W 리다이렉트 실패")
 
-            print(f"\n본문결과: 성공{body_success}건 / 스니펫{body_snippet}건")
+            print(f"\n본문결과: 성공{ok} / 스니펫{sn}")
         finally:
             if browser:
                 await browser.close()
@@ -1214,8 +1075,8 @@ async def enrich_articles(articles):
 def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
     today = now_kst().strftime("%Y년 %m월 %d일")
 
-    smm_articles     = [a for a in articles if "SMM" in a.get("source", "")][:3]
-    general_articles = [a for a in articles if "SMM" not in a.get("source", "")]
+    smm_articles = [a for a in articles if "SMM" in a.get("source", "")][:3]
+    gen_articles = [a for a in articles if "SMM" not in a.get("source", "")]
 
     def fmt_article(i, a):
         du   = a.get("real_url") or a["link"]
@@ -1227,65 +1088,70 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
         return line
 
     smm_sec = "\n\n".join(fmt_article(i, a) for i, a in enumerate(smm_articles))
-    gen_sec = "\n\n".join(fmt_article(i, a) for i, a in enumerate(general_articles))
+    gen_sec = "\n\n".join(fmt_article(i, a) for i, a in enumerate(gen_articles))
 
     if price_data:
         spreads   = compute_spreads(price_data)
-        price_str = format_price_for_prompt(price_data, usd_cny, spreads)
-        price_sec = f"\n[당일 SMM 시세]\n{price_str}\n"
+        price_sec = f"\n[당일 SMM 시세]\n{format_price_for_prompt(price_data, usd_cny, spreads)}\n"
         price_guide = """
-[시사점 5개 작성 — 아래 구성 반드시 준수]
-① 시세 종합 (1개만, 필수): 탄산리튬·니켈·코발트 스프레드를 하나로 묶어 원료 매입/제품 판매 전략 시사점. 구체적 수치 인용.
-② 오늘 기사 기반 (2~3개, 필수): 위 뉴스에서 직접 도출. 공급망/M&A/정책·규제/경쟁사/기술 중 선택. 성일하이텍 관련성 연결.
-③ 해외법인 연계 (1개, 필수): 인디애나/폴란드/헝가리/인도/말레이시아/중국 법인 중 오늘 뉴스와 연결.
-④ 단기 모멘텀 종합 (1개, 필수, 마지막): 시세+뉴스 종합하여 향후 1~2주 전망 한 문장.
+[시사점 4~6개 — 아래 구성 참고]
+① 시세 종합 (1개, 필수): 탄산리튬·니켈·코발트 스프레드를 묶어
+   원료 매입/제품 판매 전략 시사점. 구체적 수치 인용.
+② 기사 기반 (2~4개, 필수): 오늘 뉴스에서 직접 도출.
+   공급망/M&A/정책·규제/경쟁사/기술 중 실제 움직임이 있었던 것만.
+③ 해외법인 연계 (관련이 실제로 있을 때만): 인디애나/폴란드/헝가리/
+   인도/말레이시아/중국 법인과 오늘 뉴스가 직접 연결될 때만 작성.
+   억지로 연결하지 말 것. 없으면 ②를 하나 더 쓸 것.
+④ 단기 모멘텀 (1개, 필수, 마지막): 향후 1~2주 전망 한 문장.
 
-[금지] 시세 관련 내용 2개 이상 금지. 기사/동향 기반 내용 최소 2개 이상 필수.
+[금지] 시세 관련 2개 이상. 근거 없는 추측. 매일 반복되는 일반론.
 """
     else:
-        price_sec   = ""
+        price_sec = ""
         price_guide = ""
 
     prompt = f"""당신은 배터리 재활용 산업 전문 시니어 애널리스트입니다. JSON만 출력하세요.
 오늘: {today}
 {price_sec}
-[SMM Metal 기사 최우선 2건]
+[SMM Metal 기사 최우선]
 {smm_sec if smm_sec else "없음"}
 
 [일반 뉴스]
 {gen_sec}
 
-[성일하이텍 사업 맥락 — 선별 기준으로 활용]
-성일하이텍은 한국 최대 리튬이온배터리 재활용 업체로, 블랙매스에서 황산코발트·황산니켈·탄산리튬을 습식제련으로 생산한다.
-- 업스트림(원료 공급): SK온·LG에너지솔루션·삼성SDI·CATL·BYD 등 배터리셀 제조사 → 폐배터리·스크랩 공급처
-- 다운스트림(제품 수요): 에코프로비엠·포스코퓨처엠·엘앤에프 등 양극재·전구체 업체, 글로벌 배터리소재 업체
-- 시장 지표: 이차전지·전기차 시장 동향 → 미래 폐배터리 발생량 결정
-따라서 재활용 직접 언급이 없어도, 위 밸류체인 관련 기사는 성일 사업과 직결된 중요 정보다.
+[성일하이텍 사업 맥락 — 선별 기준]
+성일하이텍은 한국 최대 리튬이온배터리 재활용 업체로, 블랙매스에서
+황산코발트·황산니켈·탄산리튬을 습식제련으로 생산한다.
+- 업스트림: SK온·LG에너지솔루션·삼성SDI·CATL·BYD → 폐배터리·스크랩 공급처
+- 다운스트림: 에코프로비엠·포스코퓨처엠·엘앤에프 등 양극재·전구체 업체
+- 시장 지표: 이차전지·전기차·ESS 시장 → 미래 폐배터리 발생량 결정
 
 [필수 선별 규칙]
-- articles는 반드시 8건 이상 12건 이하로 선택.
-- 위 뉴스 목록에서 최대한 많이 선택. 관련도 낮아도 배터리/소재/공급망이면 포함.
-- 성일하이텍 기사 반드시 포함 (없으면 밸류체인 관련 한국 기사로 대체).
-- 한국 배터리 밸류체인 기사(SK온·LG에너지솔루션·삼성SDI·이차전지·전기차·양극재) 최소 2건 이상 선택.
-- LNG·석유·태양전지·아이오딘 등 배터리 밸류체인과 무관한 기사는 제외.
-- 태그: 반드시 아래 5개 중 정확히 하나 선택 → 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 / 공급망 및 파트너십 / 기술 및 공정
-- 금지: 증권리포트/주가기사/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰기사/LNG/석유/태양전지
-- 금지: 기사 본문에 언급된 발표·보도 날짜가 14일 이상 이전인 기사 (MOU·정책 발표 등 오래된 뉴스)
+- 오늘 실제로 중요한 기사만 선택. 4건이면 4건, 12건이면 12건. (최대 12건)
+  건수를 채우기 위해 관련도 낮은 기사를 넣지 말 것.
+- 전문지(Batteries News, Charged EVs, electrive, Energy Storage News,
+  SMM, 디일렉, 더구루) 기사를 우선 검토할 것.
+- 성일하이텍 관련 기사가 있으면 반드시 포함.
+- 배터리 밸류체인과 무관한 기사 제외 (LNG·석유·태양전지·반도체·디스플레이).
+- 태그: 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 /
+        공급망 및 파트너십 / 기술 및 공정 중 정확히 하나.
+- 금지: 증권리포트/주가/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰
+- 금지: 본문에 언급된 발표일이 14일 이상 지난 기사
 
-★ [유사 기사 통합 규칙]
-- 동일 이슈 기사가 2건 이상이면 가장 정보가 풍부한 1건만 선택.
-  summary에서 "○○·△△ 등 복수 매체 보도" 방식으로 통합 언급.
-- 언어/관점이 다른 경우(한국어+영어)는 각 1건 허용.
+★ [유사 기사 통합]
+- 동일 이슈가 2건 이상이면 가장 정보가 풍부한 1건만.
+  summary에 "○○·△△ 등 복수 보도"로 통합 언급.
+- 한국어판과 영어판은 관점이 다르면 각 1건 허용.
 
-[요약기준] 3문장이내. 기관명·기업명·금액·수치·날짜 필수. 추상적요약금지.
+[요약기준] 3문장 이내. 기관명·기업명·금액·수치·날짜 필수. 추상적 요약 금지.
 계획≠실행, MOU≠계약, 검토≠확정.
 
-[트렌드3개] 한국/중국/미국EU 균형. 오늘 기사 수치·정책명 직접인용.
+[트렌드 3개] 한국/중국/미국EU 균형. 오늘 기사 수치·정책명 직접 인용.
 {price_guide}
 
-JSON (articles 최소8건 필수):
+JSON:
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
-articles 최소8건~최대12건. trends 3개. insights 5개. 모든텍스트 한국어."""
+articles 최대 12건. trends 3개. insights 4~6개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     cfg   = genai.GenerationConfig(response_mime_type="application/json", temperature=0.2)
@@ -1309,26 +1175,421 @@ articles 최소8건~최대12건. trends 3개. insights 5개. 모든텍스트 한
     raise Exception("Gemini 3회 실패")
 
 # ============================================================
-# 시세 HTML 블록
+# 웹 페이지 생성
 # ============================================================
-def _fmt(val, prefix="") -> str:
-    if val is None:
-        return "—"
-    return f"{prefix}{val:,.0f}"
+TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A",
+             "정책 및 규제", "기술 및 공정"]
 
-def _pct_color(pct: str) -> str:
-    if not pct or pct == "N/A":
-        return "#888888"
-    return "#c0392b" if "+" in pct else "#2471a3"
+_WEB_CSS = """
+  body { margin:0;background:#f8fafc;font-family:'Apple SD Gothic Neo',
+         'Malgun Gothic',Arial,sans-serif;color:#0f2744;-webkit-text-size-adjust:100%; }
+  .wrap { max-width:760px;margin:0 auto;padding:0 16px 60px; }
+  details summary::-webkit-details-marker { display:none; }
+  details summary { list-style:none; }
+  details[open] summary { color:#64748b; }
+  a:hover { text-decoration:underline !important; }
+  h2.sec { font-size:16px;margin:34px 0 10px;font-weight:700; }
+  @media (max-width:600px) { .wrap { padding:0 12px 40px; } }
+"""
 
+_WEATHER_JS = """
+const spots = __SPOTS__;
+const CODE = {0:"맑음",1:"대체로 맑음",2:"구름 조금",3:"흐림",
+  45:"안개",48:"안개",51:"이슬비",53:"이슬비",55:"이슬비",
+  56:"어는 이슬비",57:"어는 이슬비",61:"약한 비",63:"비",65:"강한 비",
+  66:"어는 비",67:"어는 비",71:"약한 눈",73:"눈",75:"강한 눈",77:"싸락눈",
+  80:"소나기",81:"소나기",82:"강한 소나기",85:"눈소나기",86:"눈소나기",
+  95:"뇌우",96:"뇌우",99:"뇌우"};
+Promise.all(spots.map(s =>
+  fetch("https://api.open-meteo.com/v1/forecast?latitude=" + s.lat
+      + "&longitude=" + s.lon
+      + "&current=temperature_2m,weather_code"
+      + "&daily=temperature_2m_max,temperature_2m_min"
+      + "&timezone=Asia%2FSeoul&forecast_days=1")
+    .then(r => r.json())
+    .then(d => {
+      const c = d.current, dy = d.daily;
+      return '<span><b style="color:#fff;">' + s.name + '</b> '
+           + (CODE[c.weather_code] || "") + " "
+           + Math.round(c.temperature_2m) + "\\u00B0 "
+           + '<span style="color:#94a3b8;">'
+           + Math.round(dy.temperature_2m_min[0]) + "/"
+           + Math.round(dy.temperature_2m_max[0]) + "\\u00B0</span></span>";
+    })
+    .catch(() => '<span>' + s.name + ' —</span>')
+)).then(h => { document.getElementById('wx').innerHTML = h.join(''); });
+"""
+
+_CHART_JS = """
+(function() {
+  const D = __CD__;
+  const solid = D.labels.length > 20 ? 0 : 3;
+
+  const ds = (label, data, color, dash) => ({
+    label, data, borderColor: color, backgroundColor: color,
+    borderDash: dash ? [5, 4] : [],
+    tension: .25, borderWidth: 2, pointRadius: solid, spanGaps: false
+  });
+
+  const opts = () => ({
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { boxWidth: 12, font: { size: 11 } } },
+      tooltip: { callbacks: { label: c => c.dataset.label + ': '
+        + (c.parsed.y == null ? '—' : '$' + c.parsed.y.toLocaleString()) } }
+    },
+    scales: {
+      y: { ticks: { font: { size: 10 },
+           callback: v => '$' + (v/1000).toFixed(0) + 'k' } },
+      x: { ticks: { maxRotation: 0, autoSkipPadding: 20, font: { size: 10 } } }
+    }
+  });
+
+  const draw = (id, sets) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    new Chart(el, { type:'line', data:{ labels: D.labels, datasets: sets }, options: opts() });
+  };
+
+  draw('ch_ni', [
+    ds('현물 (Cash)', D.ni,    '#1d4ed8', false),
+    ds('선물 (3M)',   D.ni_3m, '#93c5fd', true)
+  ]);
+  draw('ch_co', [
+    ds('황산코발트',  D.co,       '#b45309', false),
+    ds('Co 금속환산', D.co_metal, '#fbbf24', true)
+  ]);
+  draw('ch_li', [
+    ds('현물 BG',   D.li_bat, '#059669', false),
+    ds('현물 TG',   D.li_ind, '#6ee7b7', false),
+    ds('GFEX 선물', D.lc_fut, '#94a3b8', true)
+  ]);
+})();
+"""
+
+_CSV_JS = """
+function dlCsv() {
+  const H = ['날짜','LME니켈현물','LME니켈3M','황산코발트','Co금속환산',
+             'TG탄산리튬','BG탄산리튬','GFEX선물','USD/CNY'];
+  const K = ['date','ni','ni_3m','co','co_metal','li_ind','li_bat','lc_fut','usd_cny'];
+  fetch('__DATA__').then(r => r.json()).then(rows => {
+    const csv = '\\uFEFF' + [H.join(',')]
+      .concat(rows.map(r => K.map(k => (r[k] == null ? '' : r[k])).join(','))).join('\\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+    a.download = 'brdb_prices.csv';
+    a.click();
+  }).catch(() => alert('시세 데이터를 불러오지 못했습니다.'));
+}
+"""
+
+
+def build_price_web(price_data: dict, usd_cny: float, hist: list,
+                    data_path: str = "data/prices.json") -> str:
+    if not price_data:
+        return ""
+
+    today   = now_kst().strftime("%Y.%m.%d")
+    spreads = compute_spreads(price_data)
+
+    badges = ""
+    for k, label in [("탄산리튬", "LC"), ("니켈", "Ni")]:
+        if k in spreads:
+            s   = spreads[k]
+            clr = "#c0392b" if s["spread"] > 0 else "#2563eb"
+            badges += (f'<span style="background:{clr};color:#fff;font-size:11px;'
+                       f'font-weight:700;padding:4px 10px;border-radius:4px;'
+                       f'margin-right:8px;">{label} {s["structure"]} '
+                       f'{s["spread_pct"]:+.1f}%</span>')
+
+    def row(label, sub, usd, cny, pct, tag=""):
+        color = _pct_color(pct)
+        return f"""
+        <tr>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;">
+            <b style="font-size:13px;">{esc(label)}</b>{tag}<br>
+            <span style="font-size:11px;color:#8f9ba8;">{esc(sub)}</span></td>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;">
+            <b style="font-size:13px;">{usd}</b><br>
+            <span style="color:#aaa;font-size:11px;">{cny}</span></td>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;
+                     text-align:center;font-weight:700;font-size:13px;color:{color};">
+            {pct or '—'}</td>
+        </tr>"""
+
+    FAIL_TAG = (' <span style="background:#fee2e2;color:#b91c1c;font-size:9px;'
+                'padding:1px 5px;border-radius:3px;">수집실패</span>')
+    T1_TAG   = (' <span style="background:#fef3c7;color:#92400e;font-size:9px;'
+                'font-weight:700;padding:1px 5px;border-radius:3px;">T-1</span>')
+
+    rows = ""
+    for r in price_data.get("spot", []):
+        if r.get("status") != "OK":
+            rows += row(r.get("name", ""), r.get("name_en", ""), "—", "", "N/A", FAIL_TAG)
+            continue
+        tag   = T1_TAG if r.get("delayed") else ""
+        extra = f" · {r['metal_label']} 환산 ${r['usd_metal']:,.0f}" if r.get("usd_metal") else ""
+        rows += row(
+            r["name"].replace("배터리용 ", "BG ").replace("공업용 ", "TG "),
+            (r.get("name_en") or "") + extra,
+            _fmt(r.get("usd_excl"), "$"), _fmt(r.get("cny_excl"), "CNY"),
+            r.get("change_pct"), tag)
+
+    rows += ('<tr><td colspan="3" style="padding:8px 14px;background:#f1f5f9;'
+             'font-size:11px;font-weight:700;color:#64748b;text-align:center;">'
+             f'선물 · USD/CNY {usd_cny:.2f}</td></tr>')
+
+    for r in price_data.get("futures", []):
+        if r.get("status") != "OK":
+            rows += row(r.get("name", ""), r.get("ticker", ""), "—", "", "N/A", FAIL_TAG)
+            continue
+        if r.get("exchange") == "LME":
+            usd, cny = r.get("latest"), r.get("latest_vat_excl")
+        else:
+            cny = r.get("latest_vat_excl")
+            usd = round(cny / usd_cny) if cny else None
+        rows += row(r["name"].replace(" 선물", ""), r.get("ticker", ""),
+                    _fmt(usd, "$"), _fmt(cny, "CNY"), r.get("change_pct"),
+                    T1_TAG if r.get("delayed") else "")
+
+    # --- 차트 ---
+    recent = hist[-30:] if hist else []
+    n_days = len(recent)
+    CD = {
+        "labels":   [h["date"][5:]     for h in recent],
+        "ni":       [h.get("ni")       for h in recent],
+        "ni_3m":    [h.get("ni_3m")    for h in recent],
+        "co":       [h.get("co")       for h in recent],
+        "co_metal": [h.get("co_metal") for h in recent],
+        "li_ind":   [h.get("li_ind")   for h in recent],
+        "li_bat":   [h.get("li_bat")   for h in recent],
+        "lc_fut":   [h.get("lc_fut")   for h in recent],
+    }
+
+    def canvas(cid, title, sub):
+        return f"""
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;
+                  padding:16px 18px;margin-bottom:14px;">
+        <div style="font-size:13px;font-weight:700;">{title}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">{sub}</div>
+        <div style="position:relative;height:230px;"><canvas id="{cid}"></canvas></div>
+      </div>"""
+
+    note = ("데이터가 하루치입니다. 며칠 누적되면 추세가 보입니다."
+            if n_days < 3 else f"최근 {n_days}일 · 실선 현물 / 점선 선물")
+
+    chart_block = f"""
+      <div style="font-size:13px;font-weight:700;margin:24px 0 4px;">시세 추이</div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">{note}</div>
+      {canvas("ch_ni", "니켈",   "LME Cash · 3M 선물")}
+      {canvas("ch_co", "코발트", "SMM 황산코발트 · Co 금속환산")}
+      {canvas("ch_li", "리튬",   "SMM 공업용(TG) · 배터리용(BG) · GFEX 선물")}
+      <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+      <script>{_CHART_JS.replace("__CD__", json.dumps(CD, ensure_ascii=False))}</script>"""
+
+    return f"""
+  <h2 class="sec">SMM · LME 배터리 소재 시세</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;
+              flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+    <span style="font-size:12px;color:#64748b;">
+      {today} · SMM 증치세 제외 · LME T-1 전일결산</span>
+    <button onclick="dlCsv()" style="font-size:11px;padding:5px 12px;
+            border:1px solid #cbd5e1;border-radius:5px;background:#fff;
+            cursor:pointer;color:#475569;">CSV 받기</button>
+  </div>
+  <div style="margin-bottom:12px;">{badges or '&nbsp;'}</div>
+  <table width="100%" cellpadding="0" cellspacing="0"
+         style="background:#fff;border:1px solid #e2e8f0;border-collapse:collapse;">
+    <thead><tr style="background:#f8fafc;">
+      <td style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;
+                 border-bottom:2px solid #e2e8f0;">품목</td>
+      <td style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;
+                 text-align:right;border-bottom:2px solid #e2e8f0;">USD/t · CNY/t</td>
+      <td style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;
+                 text-align:center;border-bottom:2px solid #e2e8f0;">등락</td>
+    </tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
+  {chart_block}
+  <script>{_CSV_JS.replace("__DATA__", data_path)}</script>"""
+
+
+def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
+    today        = now_kst().strftime("%Y년 %m월 %d일")
+    archive_href = "index.html" if in_archive else "archive/index.html"
+    data_path    = "../data/prices.json" if in_archive else "data/prices.json"
+    price_web    = build_price_web(price_data, usd_cny, hist or [], data_path)
+
+    by_tag = {}
+    for a in data.get("articles", []):
+        by_tag.setdefault(a.get("tag", "기타"), []).append(a)
+
+    def card(a, compact=False):
+        url = esc(a.get("real_url") or a.get("link", ""))
+        pad = "12px 14px" if compact else "20px"
+        fs  = "14px" if compact else "16px"
+        summary = "" if compact else (
+            f'<p style="font-size:14px;color:#475569;line-height:1.65;margin:8px 0 0;">'
+            f'{esc(a.get("summary",""))}</p>')
+        return f"""
+        <div style="border:1px solid #e2e8f0;border-radius:8px;
+                    padding:{pad};margin-bottom:10px;background:#fff;">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">
+            <span style="background:#dcfce7;color:#15803d;padding:2px 8px;
+                         border-radius:4px;font-weight:700;">{esc(a.get('region',''))}</span>
+            &nbsp;{esc(a.get('source',''))} · {esc(a.get('date',''))}</div>
+          <a href="{url}" target="_blank" rel="noopener"
+             style="font-size:{fs};font-weight:700;color:#0f2744;
+                    text-decoration:none;line-height:1.4;">{esc(a.get('title',''))}</a>
+          {summary}
+        </div>"""
+
+    sections = ""
+    for tag in TAG_ORDER:
+        arts = by_tag.get(tag)
+        if not arts:
+            continue
+        head, rest = arts[:3], arts[3:]
+        rest_html = ""
+        if rest:
+            rest_html = f"""
+            <details style="margin-top:4px;">
+              <summary style="cursor:pointer;font-size:13px;color:#2563eb;
+                              font-weight:600;padding:8px 0;">
+                ▽ 나머지 {len(rest)}건 보기</summary>
+              <div style="margin-top:10px;">{''.join(card(a, True) for a in rest)}</div>
+            </details>"""
+        sections += f"""
+        <h3 style="font-size:15px;font-weight:700;color:#334155;
+                   border-left:3px solid #2563eb;padding-left:10px;margin:26px 0 12px;">
+          {esc(tag)} <span style="color:#94a3b8;font-weight:400;">({len(arts)})</span></h3>
+        {''.join(card(a) for a in head)}{rest_html}"""
+
+    trends = ""
+    for i, t in enumerate(data.get("trends", [])):
+        trends += f"""
+        <div style="border-left:4px solid #2563eb;background:#fff;padding:16px 18px;
+                    margin-bottom:12px;border-radius:0 6px 6px 0;">
+          <div style="font-size:11px;font-weight:800;color:#2563eb;">TREND 0{i+1}</div>
+          <div style="font-size:15px;font-weight:700;color:#0f2744;margin:6px 0 8px;">
+            {esc(t.get('title',''))}</div>
+          <div style="font-size:14px;color:#475569;line-height:1.65;">
+            {esc(t.get('body',''))}</div>
+        </div>"""
+
+    insights = ""
+    for ins in data.get("insights", []):
+        insights += f"""
+        <tr>
+          <td valign="top" style="width:22px;color:#d97706;font-size:15px;
+                                  line-height:1.7;padding-top:2px;">&#9658;</td>
+          <td style="font-size:14px;color:#451a03;line-height:1.7;
+                     padding-bottom:14px;">{esc(ins)}</td>
+        </tr>"""
+
+    weather_js = _WEATHER_JS.replace("__SPOTS__",
+                                     json.dumps(WEATHER_SPOTS, ensure_ascii=False))
+
+    return f"""<!DOCTYPE html>
+<html lang="ko"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Battery Recycling Daily Brief — {today}</title>
+<style>{_WEB_CSS}</style></head><body>
+
+<div style="background:#0f2744;color:#fff;padding:26px 0;">
+  <div class="wrap">
+    <div style="font-size:20px;font-weight:700;letter-spacing:.5px;">
+      BATTERY RECYCLING DAILY BRIEF</div>
+    <div style="color:#94a3b8;font-size:13px;margin-top:6px;">{today}</div>
+    <div id="wx" style="margin-top:14px;display:flex;gap:18px;flex-wrap:wrap;
+                        font-size:13px;color:#cbd5e1;">불러오는 중…</div>
+    <div style="margin-top:12px;">
+      <a href="{archive_href}" style="font-size:12px;color:#93c5fd;
+         text-decoration:none;">지난 브리핑 보기 &rarr;</a></div>
+  </div>
+</div>
+
+<div class="wrap">
+  {price_web}
+
+  <h2 class="sec">분야별 기사</h2>
+  <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">
+    분야별 상위 3건 표시 · 나머지는 펼쳐서 확인</div>
+  {sections or '<p style="color:#94a3b8;font-size:13px;">기사 없음</p>'}
+
+  <h2 class="sec">오늘의 산업 흐름</h2>
+  {trends}
+
+  <h2 class="sec">재활용 사업자 관점 시사점</h2>
+  <div style="background:#fefce8;border:1px solid #fde047;
+              border-radius:8px;padding:20px 22px;">
+    <table width="100%" cellpadding="0" cellspacing="0">{insights}</table>
+  </div>
+
+  <div style="margin-top:44px;padding-top:18px;border-top:1px solid #e2e8f0;
+              font-size:12px;color:#94a3b8;line-height:1.6;">
+    Battery Recycling Daily Brief · {today}<br>
+    &copy; Ben Seo · Sales &amp; Marketing Division / SungEel HiTech
+  </div>
+</div>
+
+<script>{weather_js}</script>
+</body></html>"""
+
+
+def build_archive_index():
+    files = sorted(glob.glob("docs/archive/*.html"), reverse=True)
+    dates = [os.path.basename(f)[:-5] for f in files
+             if os.path.basename(f) != "index.html"]
+
+    by_month = {}
+    for d in dates:
+        by_month.setdefault(d[:7], []).append(d)
+
+    body = ""
+    for month in sorted(by_month, reverse=True):
+        links = "".join(
+            f'<a href="{d}.html" style="display:inline-block;padding:7px 12px;'
+            f'margin:0 6px 6px 0;background:#fff;border:1px solid #e2e8f0;'
+            f'border-radius:6px;font-size:13px;color:#0f2744;'
+            f'text-decoration:none;">{d[8:]}일</a>'
+            for d in sorted(by_month[month], reverse=True))
+        body += (f'<h3 style="font-size:14px;color:#334155;margin:26px 0 10px;">'
+                 f'{month[:4]}년 {int(month[5:])}월</h3><div>{links}</div>')
+
+    html = f"""<!DOCTYPE html><html lang="ko"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Daily Brief 아카이브</title>
+</head><body style="margin:0;background:#f8fafc;font-family:'Apple SD Gothic Neo',
+'Malgun Gothic',Arial,sans-serif;color:#0f2744;">
+<div style="background:#0f2744;color:#fff;padding:24px 0;">
+  <div style="max-width:760px;margin:0 auto;padding:0 16px;">
+    <div style="font-size:18px;font-weight:700;">DAILY BRIEF 아카이브</div>
+    <div style="color:#94a3b8;font-size:12px;margin-top:5px;">총 {len(dates)}건</div>
+  </div></div>
+<div style="max-width:760px;margin:0 auto;padding:10px 16px 60px;">
+  <a href="../index.html" style="display:inline-block;margin:18px 0 6px;
+     font-size:13px;color:#2563eb;text-decoration:none;">← 오늘 브리핑</a>
+  {body or '<p style="color:#94a3b8;font-size:13px;">아직 없습니다.</p>'}
+</div></body></html>"""
+
+    with open("docs/archive/index.html", "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"  아카이브 인덱스: {len(dates)}건")
+
+# ============================================================
+# 이메일 (시세 + 시사점 + 웹 링크)
+# ============================================================
 def _source_badge(source: str) -> str:
     colors = {"LME": ("#dbeafe", "#1d4ed8"), "SMM": ("#f0fdf4", "#15803d")}
     bg, fg = colors.get(source, ("#f1f5f9", "#64748b"))
-    return (
-        f'<span style="display:inline-block;background:{bg};color:{fg};'
-        f'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-        f'margin-left:4px;vertical-align:middle;">{source}</span>'
-    )
+    return (f'<span style="display:inline-block;background:{bg};color:{fg};'
+            f'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+            f'margin-left:4px;vertical-align:middle;">{source}</span>')
+
 
 def build_price_section(price_data: dict, usd_cny: float) -> str:
     today   = now_kst().strftime("%Y.%m.%d")
@@ -1343,278 +1604,164 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
             spread_badges += (
                 f'{sep}<span style="display:inline-block;background:{clr};color:#fff;'
                 f'font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;">'
-                f'{label} {s["structure"]} {s["spread_pct"]:+.1f}%</span>'
-            )
+                f'{label} {s["structure"]} {s["spread_pct"]:+.1f}%</span>')
+
+    def trow(label, sub, badges, price_cell, extra_cell, pct):
+        return f"""
+        <tr>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
+            <b style="font-size:13px;color:#0f2744;">{esc(label)}</b>{badges}<br>
+            <span style="font-size:11px;color:#8f9ba8;">{esc(sub)}</span></td>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">{price_cell}</td>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">{extra_cell}</td>
+          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">{pct or '—'}</td>
+        </tr>"""
 
     spot_rows = ""
     for r in price_data["spot"]:
-        ok      = r.get("status") == "OK"
-        name    = r.get("name", "")
-        src     = r.get("source", "SMM")
-        pct     = r.get("change_pct", "N/A") if ok else "N/A"
-        delayed = r.get("delayed", False)
+        ok   = r.get("status") == "OK"
+        name = r.get("name", "")
+        src  = r.get("source", "SMM")
+        pct  = r.get("change_pct", "N/A") if ok else "N/A"
 
         badges = _source_badge(src)
-        if name == "황산코발트":
-            badges += ('<span style="display:inline-block;background:#e2e8f0;color:#64748b;'
-                       'font-size:9px;padding:1px 5px;border-radius:3px;margin-left:3px;'
-                       'vertical-align:middle;">참고</span>')
-        if delayed:
+        if r.get("delayed"):
             badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
                        'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
                        'margin-left:3px;vertical-align:middle;">T-1</span>')
+        if not ok:
+            badges += ('<span style="display:inline-block;background:#fee2e2;color:#b91c1c;'
+                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                       'margin-left:3px;vertical-align:middle;">수집실패</span>')
 
         if ok:
-            usd_str    = _fmt(r.get("usd_excl"), "$")
-            cny_str    = _fmt(r.get("cny_excl"), "CNY")
-            price_cell = (
-                f'<b style="font-size:13px;">{usd_str}</b>'
-                f'<br><span style="color:#aaaaaa;font-size:11px;">{cny_str}</span>'
-            )
+            price_cell = (f'<b style="font-size:13px;">{_fmt(r.get("usd_excl"), "$")}</b>'
+                          f'<br><span style="color:#aaaaaa;font-size:11px;">'
+                          f'{_fmt(r.get("cny_excl"), "CNY")}</span>')
         else:
             price_cell = '<span style="color:#aaaaaa;">—</span>'
 
-        if ok and name == "황산코발트" and r.get("usd_metal"):
-            extra_cell = (
-                f'<b style="font-size:12px;">{_fmt(r.get("usd_metal"), "$")}</b>'
-                f'<br><span style="color:#aaaaaa;font-size:10px;">Co 금속환산</span>'
-            )
+        if ok and r.get("usd_metal"):
+            extra_cell = (f'<b style="font-size:12px;">{_fmt(r.get("usd_metal"), "$")}</b>'
+                          f'<br><span style="color:#aaaaaa;font-size:10px;">'
+                          f'{r.get("metal_label")} 금속환산</span>')
         elif ok and src == "LME":
             extra_cell = '<span style="color:#94a3b8;font-size:11px;">직접 금속가</span>'
         else:
             extra_cell = '<span style="color:#d1d5db;">—</span>'
 
-        label   = name.replace("배터리용 ", "BG ").replace("공업용 ", "TG ")
-        name_en = r.get("name_en", "")
-
-        spot_rows += f"""
-        <tr>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;">{label}</b>{badges}<br>
-            <span style="font-size:11px;color:#8f9ba8;">{name_en}</span>
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {price_cell}
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {extra_cell}
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">
-            {pct}
-          </td>
-        </tr>"""
+        spot_rows += trow(
+            name.replace("배터리용 ", "BG ").replace("공업용 ", "TG "),
+            r.get("name_en", ""), badges, price_cell, extra_cell, pct)
 
     fut_rows = ""
     for r in price_data["futures"]:
-        ok      = r.get("status") == "OK"
-        is_lme  = r.get("exchange") == "LME"
-        pct     = r.get("change_pct", "N/A") if ok else "N/A"
-        delayed = r.get("delayed", False)
-        ticker  = r.get("ticker", "")
-        label   = r.get("name", "").replace(" 선물", "")
-
-        f_badges = ""
-        if delayed:
-            f_badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
-                         'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-                         'margin-left:4px;vertical-align:middle;">T-1</span>')
+        ok  = r.get("status") == "OK"
+        pct = r.get("change_pct", "N/A") if ok else "N/A"
+        badges = ""
+        if r.get("delayed"):
+            badges = ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
+                      'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                      'margin-left:4px;vertical-align:middle;">T-1</span>')
+        if not ok:
+            badges += ('<span style="display:inline-block;background:#fee2e2;color:#b91c1c;'
+                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                       'margin-left:3px;vertical-align:middle;">수집실패</span>')
 
         if ok:
-            if is_lme:
-                usd     = r.get("latest")
-                cny     = r.get("latest_vat_excl")
-                price_f = (
-                    f'<b style="font-size:13px;">{_fmt(usd, "$")}</b>'
-                    f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(cny, "CNY")}</span>'
-                )
+            if r.get("exchange") == "LME":
+                usd, cny = r.get("latest"), r.get("latest_vat_excl")
             else:
-                ve      = r.get("latest_vat_excl")
-                ue      = round(ve / usd_cny) if ve else None
-                price_f = (
-                    f'<b style="font-size:13px;">{_fmt(ue, "$")}</b>'
-                    f'<br><span style="color:#aaaaaa;font-size:11px;">{_fmt(ve, "CNY")}</span>'
-                )
-        else:
-            price_f = '<span style="color:#aaaaaa;">—</span>'
-
-        if ok:
-            if is_lme:
+                cny = r.get("latest_vat_excl")
+                usd = round(cny / usd_cny) if cny else None
+            price_f = (f'<b style="font-size:13px;">{_fmt(usd, "$")}</b>'
+                       f'<br><span style="color:#aaaaaa;font-size:11px;">'
+                       f'{_fmt(cny, "CNY")}</span>')
+            if r.get("exchange") == "LME":
                 ref = '<span style="font-size:11px;color:#94a3b8;">LME Official</span>'
             else:
-                raw_cny = r.get("latest")
-                ref = (
-                    f'<span style="font-size:10px;color:#aaaaaa;">고시가(VAT포함)</span><br>'
-                    f'<b style="font-size:12px;color:#555;">{_fmt(raw_cny, "CNY")}</b>'
-                ) if raw_cny else '<span style="color:#d1d5db;">—</span>'
+                ref = (f'<span style="font-size:10px;color:#aaaaaa;">고시가(VAT포함)</span><br>'
+                       f'<b style="font-size:12px;color:#555;">{_fmt(r.get("latest"), "CNY")}</b>')
         else:
-            ref = '<span style="color:#d1d5db;">—</span>'
+            price_f = '<span style="color:#aaaaaa;">—</span>'
+            ref     = '<span style="color:#d1d5db;">—</span>'
 
-        fut_rows += f"""
-        <tr>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;font-family:'Malgun Gothic',Arial,sans-serif;">
-            <b style="font-size:13px;color:#0f2744;">{label}</b>{f_badges}<br>
-            <span style="font-size:11px;color:#8f9ba8;">{ticker}</span>
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {price_f}
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:right;font-family:'Malgun Gothic',Arial,sans-serif;">
-            {ref}
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e8edf2;text-align:center;font-weight:700;font-size:13px;color:{_pct_color(pct)};font-family:'Malgun Gothic',Arial,sans-serif;">
-            {pct}
-          </td>
-        </tr>"""
+        fut_rows += trow(r.get("name", "").replace(" 선물", ""),
+                         r.get("ticker", ""), badges, price_f, ref, pct)
 
     return f"""
   <tr>
-    <td bgcolor="#1e293b"
-        style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
-               letter-spacing:0.5px;padding:12px 30px;font-family:'Malgun Gothic',Arial,sans-serif;">
-      SECTION 1 &nbsp;<span style="color:#64748b;">/</span>&nbsp; SMM·LME 배터리 소재 시세
-    </td>
+    <td bgcolor="#1e293b" style="background:#1e293b;color:#ffffff;font-size:13px;
+        font-weight:700;letter-spacing:0.5px;padding:12px 30px;
+        font-family:'Malgun Gothic',Arial,sans-serif;">
+      SMM · LME 배터리 소재 시세</td>
   </tr>
   <tr>
     <td bgcolor="#ffffff" style="background:#ffffff;padding:20px 6px 16px;">
       <p style="margin:0 0 4px;font-size:12px;color:#64748b;padding:0 8px;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        {today} · SMM 증치세제외 기준 · LME T-1 전일결산가
-      </p>
-      <p style="margin:0 0 14px;padding:0 8px;">
-        {spread_badges if spread_badges else '&nbsp;'}
-      </p>
-      <table width="100%" cellpadding="0" cellspacing="0" border="0"
-             bgcolor="#ffffff"
+        {today} · SMM 증치세제외 기준 · LME T-1 전일결산가</p>
+      <p style="margin:0 0 14px;padding:0 8px;">{spread_badges or '&nbsp;'}</p>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
              style="font-size:13px;background:#ffffff;border:1px solid #e2e8f0;border-collapse:collapse;">
-        <thead>
-          <tr bgcolor="#f8fafc" style="background:#f8fafc;">
-            <td style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">현물 (Spot) · 품목</td>
-            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">CNY/t 환산</span></td>
-            <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">추가정보</td>
-            <td style="padding:10px 14px;text-align:center;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
-          </tr>
-        </thead>
+        <thead><tr bgcolor="#f8fafc" style="background:#f8fafc;">
+          <td style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">현물 · 품목</td>
+          <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">USD/t<br><span style="font-weight:400;font-size:10px;color:#94a3b8;">CNY/t</span></td>
+          <td style="padding:10px 14px;text-align:right;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">추가정보</td>
+          <td style="padding:10px 14px;text-align:center;font-size:11px;color:#475569;font-weight:700;border-bottom:2px solid #e2e8f0;font-family:'Malgun Gothic',Arial,sans-serif;">등락</td>
+        </tr></thead>
         <tbody>
           {spot_rows}
-          <tr>
-            <td colspan="4" bgcolor="#f1f5f9"
-                style="padding:8px 14px;background:#f1f5f9;font-size:11px;font-weight:700;
-                       color:#64748b;text-align:center;font-family:'Malgun Gothic',Arial,sans-serif;">
-              선물 (Futures) &nbsp;|&nbsp; USD/CNY {usd_cny:.2f} &nbsp;|&nbsp; GFEX 증치세제외
-            </td>
-          </tr>
+          <tr><td colspan="4" bgcolor="#f1f5f9" style="padding:8px 14px;background:#f1f5f9;
+              font-size:11px;font-weight:700;color:#64748b;text-align:center;
+              font-family:'Malgun Gothic',Arial,sans-serif;">
+            선물 &nbsp;|&nbsp; USD/CNY {usd_cny:.2f} &nbsp;|&nbsp; GFEX 증치세제외</td></tr>
           {fut_rows}
         </tbody>
       </table>
       <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        출처: Co·Li 현물 <b>SMM</b> · Ni 현물/선물 <b>LME</b> via Westmetall (T-1 전일결산가) · LC 선물 <b>GFEX</b> · 증치세제외 = 포함가÷1.13
-      </p>
+        Co·Li 현물 <b>SMM</b> · Ni <b>LME</b> via Westmetall (T-1) · LC 선물 <b>GFEX</b></p>
     </td>
   </tr>"""
 
-# ============================================================
-# 이메일 HTML 생성
-# ============================================================
-def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
-    today     = now_kst().strftime("%Y년 %m월 %d일")
-    TAG_ORDER = ["원재료 및 시황", "공급망 및 파트너십", "투자 및 M&A", "정책 및 규제", "기술 및 공정"]
 
-    by_tag = {}
-    for a in data.get("articles", []):
-        by_tag.setdefault(a.get("tag", "기타"), []).append(a)
-
-    def card(a):
-        url     = esc(a.get("real_url") or a.get("link", ""))
-        summary = esc(a.get("summary", "")).replace('\n', '<br>')
-        return f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0"
-               style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:16px;
-                      border-collapse:collapse;background:#ffffff;">
-          <tr>
-            <td style="padding:22px;">
-              <p style="margin:0 0 10px 0;">
-                <span style="display:inline-block;font-size:11px;font-weight:700;padding:4px 10px;
-                      background:#dcfce7;color:#15803d;border-radius:4px;
-                      font-family:'Malgun Gothic',Arial,sans-serif;">
-                  {esc(a.get('region', ''))}</span>
-                <span style="font-size:12px;color:#94a3b8;margin-left:8px;
-                      font-family:'Malgun Gothic',Arial,sans-serif;">
-                  {esc(a.get('source', ''))} · {esc(a.get('date', ''))}</span>
-              </p>
-              <h4 style="font-size:16px;font-weight:700;color:#0f2744;margin:0 0 10px 0;
-                         line-height:1.4;font-family:'Malgun Gothic',Arial,sans-serif;">
-                <a href="{url}" style="color:#0f2744;text-decoration:none;">{esc(a.get('title', ''))}</a>
-              </h4>
-              <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 18px 0;
-                        font-family:'Malgun Gothic',Arial,sans-serif;">
-                {summary}</p>
-              <table cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td align="center" bgcolor="#ffffff"
-                      style="border:1px solid #ea580c;border-radius:4px;">
-                    <a href="{url}" style="display:inline-block;padding:8px 16px;font-size:12px;
-                          font-weight:700;color:#ea580c;text-decoration:none;
-                          font-family:'Malgun Gothic',Arial,sans-serif;">
-                      원문 기사 보기 &rarr;</a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>"""
-
-    articles_html = ""
-    for tag in TAG_ORDER:
-        if tag not in by_tag:
-            continue
-        articles_html += (
-            f'<h3 style="font-size:15px;font-weight:700;color:#334155;'
-            f'border-left:3px solid #2563eb;padding-left:10px;margin:25px 0 12px;'
-            f'font-family:\'Malgun Gothic\',Arial,sans-serif;">{esc(tag)}</h3>'
-        )
-        for a in by_tag[tag]:
-            articles_html += card(a)
-
-    trends_html = ""
-    for i, t in enumerate(data.get("trends", [])):
-        trends_html += f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0"
-               style="margin-bottom:16px;border-collapse:collapse;
-                      border:1px solid #e2e8f0;border-radius:6px;background:#ffffff;">
-          <tr>
-            <td width="4" bgcolor="#2563eb"
-                style="background:#2563eb;font-size:1px;line-height:1px;">&nbsp;</td>
-            <td style="padding:18px 20px;">
-              <p style="font-size:12px;font-weight:800;color:#2563eb;margin:0 0 6px 0;
-                        letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;">
-                TREND 0{i+1}</p>
-              <h4 style="font-size:15px;font-weight:700;color:#0f2744;margin:0 0 8px 0;
-                         font-family:'Malgun Gothic',Arial,sans-serif;">
-                {esc(t.get('title', ''))}</h4>
-              <p style="font-size:14px;color:#475569;line-height:1.6;margin:0;
-                        font-family:'Malgun Gothic',Arial,sans-serif;">
-                {esc(t.get('body', ''))}</p>
-            </td>
-          </tr>
-        </table>"""
+def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
+    today = now_kst().strftime("%Y년 %m월 %d일")
 
     insights_html = ""
-    insights = data.get("insights", [])
-    for i, ins in enumerate(insights):
-        bb      = "border-bottom:1px dashed #fde047;" if i < len(insights) - 1 else ""
+    ins_list = data.get("insights", [])
+    for i, ins in enumerate(ins_list):
+        bb      = "border-bottom:1px dashed #fde047;" if i < len(ins_list) - 1 else ""
         pad_top = "padding-top:16px;" if i > 0 else ""
-        pad_bot = "padding-bottom:16px;" if i < len(insights) - 1 else ""
+        pad_bot = "padding-bottom:16px;" if i < len(ins_list) - 1 else ""
         insights_html += f"""
         <tr>
-          <td valign="top" style="width:20px;color:#d97706;font-size:16px;
-                                  line-height:1.6;{pad_top}
-                                  font-family:'Malgun Gothic',Arial,sans-serif;">&#9658;</td>
+          <td valign="top" style="width:20px;color:#d97706;font-size:16px;line-height:1.6;
+              {pad_top}font-family:'Malgun Gothic',Arial,sans-serif;">&#9658;</td>
           <td style="{bb}{pad_top}{pad_bot}font-size:14px;color:#451a03;line-height:1.6;
-                    font-family:'Malgun Gothic',Arial,sans-serif;">{esc(ins)}</td>
+              font-family:'Malgun Gothic',Arial,sans-serif;">{esc(ins)}</td>
         </tr>"""
 
+    n_art      = len(data.get("articles", []))
     price_rows = build_price_section(price_data, usd_cny) if price_data else ""
+
+    link_row = f"""
+  <tr>
+    <td bgcolor="#ffffff" style="background:#ffffff;padding:26px 30px;text-align:center;">
+      <table cellpadding="0" cellspacing="0" border="0" align="center">
+        <tr><td bgcolor="#1d4ed8" style="border-radius:6px;">
+          <a href="{web_url}" style="display:inline-block;padding:14px 30px;font-size:14px;
+             font-weight:700;color:#ffffff;text-decoration:none;
+             font-family:'Malgun Gothic',Arial,sans-serif;">
+            분야별 기사 {n_art}건 · 산업 흐름 · 시세 차트 &rarr;</a>
+        </td></tr>
+      </table>
+      <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;
+                font-family:'Malgun Gothic',Arial,sans-serif;">
+        분야별 상위 3건 + 펼쳐보기 · 30일 시세 추이</p>
+    </td>
+  </tr>"""
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -1630,91 +1777,49 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
           -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }}
   table {{ border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }}
   a {{ text-decoration:none; }}
-  @media print {{
-    * {{
-      -webkit-print-color-adjust: exact !important;
-      print-color-adjust: exact !important;
-      color-adjust: exact !important;
-    }}
-  }}
 </style>
 </head>
 <body style="margin:0;padding:20px;background-color:#f8fafc;">
-
 <!--[if mso]><table align="center" width="680" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
-
 <table align="center" width="100%" cellpadding="0" cellspacing="0" border="0"
        style="max-width:680px;margin:0 auto;background-color:#ffffff;
               border:1px solid #e2e8f0;border-collapse:collapse;">
-
   <tr>
-    <td bgcolor="#0f2744" style="background-color:#0f2744;padding:40px 30px;">
-      <h1 style="color:#ffffff;font-size:24px;font-weight:700;margin:0 0 10px 0;
+    <td bgcolor="#0f2744" style="background-color:#0f2744;padding:36px 30px;">
+      <h1 style="color:#ffffff;font-size:23px;font-weight:700;margin:0 0 10px 0;
                  letter-spacing:0.5px;font-family:'Malgun Gothic',Arial,sans-serif;">
         BATTERY RECYCLING DAILY BRIEF</h1>
       <p style="color:#94a3b8;font-size:14px;margin:0;
-                font-family:'Malgun Gothic',Arial,sans-serif;">
-        {today} &nbsp;|&nbsp; Battery Intelligence Report</p>
+                font-family:'Malgun Gothic',Arial,sans-serif;">{today}</p>
     </td>
   </tr>
 
   {price_rows}
 
   <tr>
-    <td bgcolor="#1e293b"
-        style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
-               letter-spacing:0.5px;padding:12px 30px;font-family:'Malgun Gothic',Arial,sans-serif;">
-      SECTION 2 &nbsp;<span style="color:#64748b;">/</span>&nbsp; 분야별 핵심 기사
-    </td>
+    <td bgcolor="#1e293b" style="background:#1e293b;color:#ffffff;font-size:13px;
+        font-weight:700;letter-spacing:0.5px;padding:12px 30px;
+        font-family:'Malgun Gothic',Arial,sans-serif;">
+      재활용 사업자 관점 시사점</td>
   </tr>
   <tr>
-    <td bgcolor="#ffffff" style="background:#ffffff;padding:10px 30px 30px;">
-      {articles_html}
-    </td>
-  </tr>
-
-  <tr>
-    <td bgcolor="#1e293b"
-        style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
-               letter-spacing:0.5px;padding:12px 30px;font-family:'Malgun Gothic',Arial,sans-serif;">
-      SECTION 3 &nbsp;<span style="color:#64748b;">/</span>&nbsp; 오늘의 산업 흐름
-    </td>
-  </tr>
-  <tr>
-    <td bgcolor="#f8fafc" style="background:#f8fafc;padding:25px 30px 30px;">
-      {trends_html}
-    </td>
-  </tr>
-
-  <tr>
-    <td bgcolor="#1e293b"
-        style="background:#1e293b;color:#ffffff;font-size:13px;font-weight:700;
-               letter-spacing:0.5px;padding:12px 30px;font-family:'Malgun Gothic',Arial,sans-serif;">
-      SECTION 4 &nbsp;<span style="color:#64748b;">/</span>&nbsp; 재활용 사업자 관점 시사점
-    </td>
-  </tr>
-  <tr>
-    <td bgcolor="#ffffff" style="background:#ffffff;padding:30px;">
-      <table width="100%" cellpadding="24" cellspacing="0" border="0"
-             bgcolor="#fefce8"
+    <td bgcolor="#ffffff" style="background:#ffffff;padding:26px 30px 6px;">
+      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#fefce8"
              style="background-color:#fefce8;border:1px solid #fde047;
                     border-radius:8px;border-collapse:collapse;">
-        <tr>
-          <td>
-            <table width="100%" cellpadding="0" cellspacing="0" border="0"
-                   style="border-collapse:collapse;">
-              {insights_html}
-            </table>
-          </td>
-        </tr>
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                 style="border-collapse:collapse;">{insights_html}</table>
+        </td></tr>
       </table>
     </td>
   </tr>
 
+  {link_row}
+
   <tr>
-    <td bgcolor="#0f2744"
-        style="background-color:#0f2744;padding:30px;text-align:center;">
-      <p style="color:#94a3b8;font-size:13px;margin:0 0 10px 0;
+    <td bgcolor="#0f2744" style="background-color:#0f2744;padding:26px 30px;text-align:center;">
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 8px 0;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
         Battery Recycling Daily Brief &nbsp;|&nbsp; {today}</p>
       <p style="color:#64748b;font-size:12px;margin:0;
@@ -1722,13 +1827,9 @@ def build_email(data, price_data: dict = None, usd_cny: float = 7.25):
         &copy; Ben Seo, Sales &amp; Marketing Division / SungEel HiTech</p>
     </td>
   </tr>
-
 </table>
-
 <!--[if mso]></td></tr></table><![endif]-->
-
-</body>
-</html>"""
+</body></html>"""
 
 # ============================================================
 # Gmail 발송
@@ -1743,7 +1844,7 @@ def send_email(html_body):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_APP_PASS)
-        bcc  = [a.strip() for a in BCC_EMAIL.split(',') if a.strip()] if BCC_EMAIL else []
+        bcc = [a.strip() for a in BCC_EMAIL.split(',') if a.strip()] if BCC_EMAIL else []
         smtp.sendmail(GMAIL_USER, [TO_EMAIL] + bcc, msg.as_string())
     print(f"발송 완료 -> {TO_EMAIL} (BCC {len(bcc)}명)")
 
@@ -1767,8 +1868,22 @@ async def main():
 
     articles = await enrich_articles(articles)
     data     = analyze(articles, price_data=price_data, usd_cny=usd_cny)
-    html     = build_email(data, price_data=price_data, usd_cny=usd_cny)
-    send_email(html)
+
+    hist = append_price_history(price_data, usd_cny)
+
+    os.makedirs("docs/archive", exist_ok=True)
+    stamp = now_kst().strftime("%Y-%m-%d")
+
+    with open("docs/index.html", "w", encoding="utf-8") as f:
+        f.write(build_web(data, price_data, usd_cny, hist, in_archive=False))
+    with open(f"docs/archive/{stamp}.html", "w", encoding="utf-8") as f:
+        f.write(build_web(data, price_data, usd_cny, hist, in_archive=True))
+    build_archive_index()
+    print(f"웹 저장 완료: docs/index.html, docs/archive/{stamp}.html")
+
+    web_url = f"{WEB_BASE}/archive/{stamp}.html"
+    send_email(build_email(data, price_data=price_data,
+                           usd_cny=usd_cny, web_url=web_url))
     print("=== 완료 ===")
 
 
