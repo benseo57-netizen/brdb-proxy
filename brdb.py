@@ -1872,6 +1872,7 @@ async def main():
     hist = append_price_history(price_data, usd_cny)
 
     os.makedirs("docs/archive", exist_ok=True)
+    open("docs/.nojekyll", "w").close()   # Jekyll 처리 건너뛰기
     stamp = now_kst().strftime("%Y-%m-%d")
 
     with open("docs/index.html", "w", encoding="utf-8") as f:
