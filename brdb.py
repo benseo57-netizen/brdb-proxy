@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 def now_kst() -> datetime:
     """GitHub Actions는 UTC 서버 → KST(+9h) 보정."""
@@ -60,9 +60,9 @@ FUTURES_EM = [
 
 # 날씨 (Open-Meteo, API 키 불필요)
 WEATHER_SPOTS = [
-    {"name": "새만금", "lat": 35.80,   "lon": 126.62},
-    {"name": "전주",   "lat": 35.8242, "lon": 127.1480},
-    {"name": "서울",   "lat": 37.5665, "lon": 126.9780},
+    {"name": "새만금", "lat": 35.9494, "lon": 126.6083},  # 군산시 오식도동
+    {"name": "전주시", "lat": 35.7983, "lon": 127.1150},  # 전주시 완산구 평화동
+    {"name": "서울",   "lat": 37.5665, "lon": 126.9780},  # 시청 기준
 ]
 
 # ============================================================
@@ -397,16 +397,30 @@ def esc(text):
             .replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
+def _to_naive_utc(dt):
+    """tz-aware면 UTC로 변환 후 naive화. naive면 이미 UTC로 간주."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.replace(tzinfo=None)
+
+
 def parse_date(pub_str):
+    """RSS pubDate → naive UTC datetime.
+    시간대 오프셋(+0900, -0400 등)을 반드시 UTC로 환산한다.
+    (환산하지 않으면 한국 기사가 9시간 최신으로,
+     미국 기사가 4시간 오래된 것으로 잘못 인식됨)
+    """
     if not pub_str:
         return None
     try:
         from email.utils import parsedate_to_datetime
-        return parsedate_to_datetime(pub_str).replace(tzinfo=None)
+        return _to_naive_utc(parsedate_to_datetime(pub_str))
     except Exception:
         pass
     try:
-        return datetime.fromisoformat(pub_str.replace('Z', '').replace('+00:00', ''))
+        return _to_naive_utc(datetime.fromisoformat(pub_str.replace('Z', '+00:00')))
     except Exception:
         return None
 
@@ -1120,7 +1134,14 @@ def collect_rss():
 
     sc = sum(1 for a in deduped if "SMM" in a.get("source", ""))
     pc = sum(1 for a in deduped if a.get("priority"))
+    dts = [a["pub_date"] for a in deduped if a.get("pub_date")]
+    if dts:
+        rng = (f"{(min(dts)+timedelta(hours=9)).strftime('%m-%d %H:%M')} ~ "
+               f"{(max(dts)+timedelta(hours=9)).strftime('%m-%d %H:%M')} KST")
+    else:
+        rng = "날짜 없음"
     print(f"\n수집: {len(raw)}건 → 최종 {len(deduped)}건 (SMM:{sc} / 전문지:{pc})")
+    print(f"  기사 날짜 범위: {rng}")
     return deduped
 
 # ============================================================
