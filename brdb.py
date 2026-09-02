@@ -86,21 +86,23 @@ PUBLISHER_FEEDS_GENERAL = [
 # 구글 뉴스 — 단순 키워드로 넓게
 GOOGLE_FEEDS = [
     {"q": "battery recycling", "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "black mass",        "lang": "en", "gl": "US", "ceid": "US:en"},
+    {"q": "battery scrap",     "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": "lithium",           "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": "nickel",            "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": "cobalt",            "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": "LFP",               "lang": "en", "gl": "US", "ceid": "US:en"},
-    {"q": "ESS",               "lang": "en", "gl": "US", "ceid": "US:en"},
     {"q": "폐배터리",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "사용후배터리",       "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "블랙매스",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "배터리 리사이클링",   "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "이차전지",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "2차전지",            "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": "배터리",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "배터리ON",           "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": "전기차",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
+    {"q": "전기차 배터리 공급",  "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "리튬",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "니켈",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "코발트",             "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
-    {"q": "ESS",               "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
     {"q": "성일하이텍",         "lang": "ko", "gl": "KR", "ceid": "KR:ko"},
 ]
 
@@ -151,6 +153,21 @@ NOISE_KEYWORDS = [
     "best electric cars", "buying guide", "deals",
     # 종합매체 대응
     "반도체 장비", "디스플레이 패널", "oled 패널", "메모리 반도체",
+    # 지자체 보조금 공고
+    "구매보조금", "보조금 추가", "추가 지원", "지원 사업 공고",
+    "보급사업", "신청 접수", "접수 시작",
+    # 충전 인프라 일반
+    "충전요금", "충전비", "충전소 확대", "충전기 설치", "이동식 충전",
+    "완속충전", "급속충전기", "ladeinfrastruktur", "ladestation",
+    # 신차·판매·시승
+    "판매 증가", "판매량", "출고", "가격 인하", "할인 판매",
+    "주행거리", "제로백", "인테리어",
+    "특징주", "급등", "급락",
+    # 수소·태양광 (전문지에 섞여 옴)
+    "green hydrogen", "수소차", "수소충전", "태양광", "solar panel",
+    "photovoltaic", "wind power", "wasserstoff",
+    # 보증·보험
+    "보증 연장", "warranty", "versicherung", "garantie",
 ]
 
 NOISE_SOURCES = [
@@ -240,6 +257,90 @@ WHITELIST = [
     "电池", "回收", "锂", "镍", "钴", "宁德时代", "比亚迪",
     "リサイクル", "電池", "リチウム", "ニッケル", "コバルト",
 ]
+
+# ============================================================
+# 관련도 점수 — 본문 추출 대상 선별용
+# ============================================================
+_SCORE_CORE = [
+    ("블랙매스", 12), ("black mass", 12), ("폐배터리", 10), ("사용후배터리", 10),
+    ("배터리 재활용", 12), ("battery recycl", 12), ("스크랩", 8), ("battery scrap", 10),
+    ("습식제련", 10), ("hydrometallurg", 10), ("hydromet", 8), ("hpal", 8),
+    ("건식제련", 8), ("pyrometallurg", 8), ("direct recycling", 10),
+    ("회수율", 6), ("recovery rate", 6), ("지불률", 10), ("payable", 8),
+    ("재활용", 6), ("recycl", 6), ("순환이용", 6), ("circular economy", 5),
+]
+
+_SCORE_METAL = [
+    ("탄산리튬", 8), ("수산화리튬", 8), ("황산니켈", 8), ("황산코발트", 8),
+    ("lithium carbonate", 8), ("lithium hydroxide", 8),
+    ("nickel sulfate", 8), ("cobalt sulfate", 8),
+    ("리튬", 4), ("니켈", 4), ("코발트", 4),
+    ("lithium", 4), ("nickel", 4), ("cobalt", 4),
+    ("mhp", 6), ("npi", 5), ("ferronickel", 5), ("nickel matte", 6),
+    ("양극재", 5), ("전구체", 5), ("cathode", 5), ("precursor", 5),
+    ("lfp", 4), ("ncm", 4), ("nca", 4),
+    # ESS = 향후 폐배터리 발생원 + 셀 공정 스크랩 발생원
+    ("ess 배터리", 7), ("ess용", 7), ("ess 셀", 8), ("ess 수주", 7),
+    ("ess 공급", 7), ("ess 증설", 7), ("ess 시장", 5), ("ess 수요", 6),
+    ("energy storage battery", 7), ("storage cell", 7), ("lfp ess", 9),
+    ("에너지저장장치", 4), ("배터리 셀", 5), ("셀 생산", 5), ("기가팩토리", 5),
+]
+
+_SCORE_POLICY = [
+    ("수출 규제", 8), ("수입 규제", 8), ("export ban", 8), ("export quota", 8),
+    ("바젤", 10), ("basel convention", 10), ("epr", 7),
+    ("핵심광물", 7), ("critical mineral", 7),
+    ("battery regulation", 7), ("battery passport", 7), ("recycled content", 8),
+    ("관세", 5), ("tariff", 5), ("ira", 5), ("rkab", 8), ("quota", 5),
+    ("폐기물관리법", 10), ("환경부", 5), ("산업부", 5),
+    ("공급망", 5), ("supply chain", 5), ("합작", 6), ("joint venture", 6),
+    ("인수", 5), ("acquisition", 5), ("증설", 5), ("착공", 5),
+]
+
+_SCORE_COMPANY = [
+    ("성일하이텍", 15), ("sungeel", 15),
+    ("에코프로씨엔지", 10), ("아이에스티엠씨", 10), ("is에코솔루션", 10),
+    ("redwood materials", 10), ("ascend elements", 10), ("cirba", 10),
+    ("ecobat", 10), ("umicore", 9), ("glencore", 8), ("fortum", 8),
+    ("stena", 8), ("li-cycle", 10), ("altilium", 8), ("tozero", 8),
+    ("brunp", 9), ("邦普", 9), ("格林美", 9),
+    ("catl", 5), ("byd", 4), ("lg에너지솔루션", 4), ("sk온", 4), ("삼성sdi", 4),
+    ("에코프로비엠", 4), ("포스코퓨처엠", 4), ("엘앤에프", 4),
+]
+
+_SCORE_PENALTY = [
+    ("보조금", -12), ("구매지원", -12), ("충전소", -10), ("충전", -6),
+    ("신차", -10), ("시승", -12), ("판매량", -8), ("판매 증가", -8),
+    ("주행거리", -10), ("디자인", -8), ("가격 인하", -8),
+    ("특징주", -15), ("급등", -12), ("주가", -15),
+    ("epc", -10), ("turnkey", -8), ("발전소", -10), ("전력망", -8),
+    ("ppa", -8), ("계통연계", -8), ("착공식", -8), ("준공식", -8),
+    ("solar farm", -10), ("wind farm", -10), ("인버터", -8),
+    ("희토류", -10), ("rare earth", -10), ("prnd", -12), ("네오디뮴", -8),
+    ("solar", -10), ("hydrogen", -12), ("수소", -12),
+    ("charging", -6), ("charger", -8),
+    ("warranty", -8), ("보증", -6),
+]
+
+_ALL_SCORES = _SCORE_CORE + _SCORE_METAL + _SCORE_POLICY + _SCORE_COMPANY + _SCORE_PENALTY
+
+
+def relevance_score(article: dict) -> int:
+    """제목+스니펫 기준 관련도. 높을수록 성일 사업과 직결."""
+    text  = (article.get("title", "") + " " + article.get("snippet", "")).lower()
+    score = sum(pt for kw, pt in _ALL_SCORES if kw in text)
+
+    src = (article.get("source") or "").lower()
+    if "smm" in src:
+        score += 6
+    elif article.get("priority"):
+        score += 3
+
+    title = article.get("title", "").lower()
+    if any(kw in title for kw, _ in _SCORE_CORE[:8]):
+        score += 5
+
+    return score
 
 # 중복 판정 제외 불용어
 _STOPWORDS = {
@@ -331,7 +432,8 @@ async def _scrape_spot(page, target: dict) -> dict:
             r"([\d]{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\n\s*yuan/t(?:onne)?", text)
 
         all_pcts   = re.findall(r"[+\-][\d,]+\.?\d*\s*\(([+\-]?\d+\.?\d*%)\)", text)
-        change_pct = next((p for p in all_pcts if p != "0%"), "N/A")
+        change_pct = next((p for p in all_pcts if p != "0%"),
+                          ("0.00%" if all_pcts else "N/A"))
 
         date_m = re.search(
             r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
@@ -419,13 +521,12 @@ def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
                    existing_titles: list = None) -> list:
     RSS_URL = "https://rss.metal.com/news/the_latest.xml"
     RELEVANT_METALS = {
-        "new energy", "lithium battery", "energy storage",
-        "sodium battery", "nickel", "cobalt", "rare earth", "scrap metals",
+        "new energy", "lithium battery", "nickel", "cobalt", "scrap metals",
     }
     SMM_KEYWORDS = {
         "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
         "cathode", "precursor", "sulfate", "hydroxide", "carbonate",
-        "mhp", "npi", "storage", "sodium", "rare earth", "lfp", "ncm", "nca",
+        "mhp", "npi", "lfp", "ncm", "nca", "scrap", "smelter", "refinery",
     }
     existing_titles = existing_titles or []
 
@@ -873,6 +974,7 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
                     source = "SMM Metal"
 
             lt, ls, ll = title.lower(), source.lower(), link.lower()
+            combined   = (title + " " + snippet).lower()
 
             if any(k in lt for k in NOISE_KEYWORDS):              continue
             if any(x in lt and y in lt for x, y in NOISE_PAIRS):  continue
@@ -881,9 +983,11 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
             if not is_special:
                 if any(s in ls or s in ll for s in NOISE_SOURCES): continue
                 if any(p in ll for p in NOISE_URL_PATHS):          continue
-                combined = (title + " " + snippet).lower()
-                if not any(w in combined for w in WHITELIST):
-                    continue
+
+            # electrive=EV충전, Energy Storage News=ESS 전문지라
+            # 전문지도 화이트리스트를 통과해야 함
+            if not any(w in combined for w in WHITELIST):
+                continue
 
             if seen is not None:
                 seen.add(link)
@@ -995,36 +1099,33 @@ async def get_real_url(page, cbm_url):
     return final_url if "news.google.com" not in final_url else None
 
 
-_VC_KW = [
-    "이차전지", "전기차", "배터리 재활용", "폐배터리", "사용후배터리", "블랙매스",
-    "battery recycl", "ev recycl", "black mass", "hydromet", "hpal",
-    "sk온", "lg에너지솔루션", "삼성sdi", "sk on", "lg energy solution", "samsung sdi",
-    "양극재", "전구체", "에코프로비엠", "포스코퓨처엠", "엘앤에프",
-]
-
-TARGET_TOTAL   = 25   # 본문 추출 총 건수
-SPECIAL_QUOTA  = 8    # 전문지 확보 칸
+TARGET_TOTAL = 25   # 본문 추출 총 건수
+MIN_SCORE    = 6    # 이 점수 미만은 제외
 
 async def enrich_articles(articles):
-    smm     = [a for a in articles if "SMM" in a.get("source", "")][:3]
+    for a in articles:
+        a["score"] = relevance_score(a)
+
+    smm = sorted([a for a in articles if "SMM" in a.get("source", "")],
+                 key=lambda x: -x["score"])[:3]
+
     sk      = ["성일하이텍", "sungeel", "성일"]
     sungeel = [a for a in articles
-               if "SMM" not in a.get("source", "")
-               and any(k in a["title"].lower() for k in sk)]
-    special = [a for a in articles
-               if a.get("priority") and a not in sungeel][:SPECIAL_QUOTA]
+               if a not in smm and any(k in a["title"].lower() for k in sk)]
 
-    pool     = [a for a in articles if "SMM" not in a.get("source", "")
-                and a not in sungeel and a not in special]
-    vc_boost = [a for a in pool if any(k in a["title"].lower() for k in _VC_KW)]
-    others   = [a for a in pool if a not in vc_boost]
+    pool = [a for a in articles if a not in smm and a not in sungeel]
+    pool = [a for a in pool if a["score"] >= MIN_SCORE]
+    pool.sort(key=lambda x: (-x["score"],
+                             -(x.get("pub_date") or datetime.min).timestamp()))
 
-    remain  = max(0, TARGET_TOTAL - len(smm) - len(sungeel) - len(special))
-    general = (vc_boost + others)[:remain]
-    targets = smm + sungeel + special + general
+    remain  = max(0, TARGET_TOTAL - len(smm) - len(sungeel))
+    general = pool[:remain]
+    targets = smm + sungeel + general
 
-    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+전문지{len(special)}"
-          f"+일반{len(general)}={len(targets)}건")
+    print(f"\n본문추출: SMM{len(smm)}+성일{len(sungeel)}+선별{len(general)}"
+          f"={len(targets)}건 ({MIN_SCORE}점 이상 후보 {len(pool)}건)")
+    if general:
+        print(f"  점수 범위: {general[0]['score']} ~ {general[-1]['score']}")
 
     browser = None
     async with async_playwright() as p:
@@ -1038,7 +1139,8 @@ async def enrich_articles(articles):
 
             ok = sn = 0
             for i, article in enumerate(targets):
-                print(f"[{i+1}/{len(targets)}] {article['title'][:55]}")
+                print(f"[{i+1}/{len(targets)}] ({article.get('score', 0):>3}점) "
+                      f"{article['title'][:50]}")
                 link = article["link"]
 
                 if "news.google.com" not in link:
@@ -1056,7 +1158,7 @@ async def enrich_articles(articles):
                     body = fetch_body(real_url)
                     article["body"] = body
                     if body:
-                        ok += 1; print(f"  OK {real_url[:60]}")
+                        ok += 1; print(f"  OK {real_url[:55]}")
                     else:
                         sn += 1; print("  W 본문없음")
                 else:
@@ -1124,7 +1226,10 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 황산코발트·황산니켈·탄산리튬을 습식제련으로 생산한다.
 - 업스트림: SK온·LG에너지솔루션·삼성SDI·CATL·BYD → 폐배터리·스크랩 공급처
 - 다운스트림: 에코프로비엠·포스코퓨처엠·엘앤에프 등 양극재·전구체 업체
-- 시장 지표: 이차전지·전기차·ESS 시장 → 미래 폐배터리 발생량 결정
+- 시장 지표: 이차전지·전기차·ESS 시장 → 미래 폐배터리 발생량 결정.
+  특히 ESS는 최근 전기차를 능가하는 성장세로, LFP 기반 대형 ESS 확대는
+  중장기 원료 발생원이자 셀 공정 스크랩 발생원. 셀 제조사의 ESS 수주·
+  증설은 중요. 단, 발전소 EPC·시공·계통연계 등 전력 인프라 사업은 무관.
 
 [필수 선별 규칙]
 - 오늘 실제로 중요한 기사만 선택. 4건이면 4건, 12건이면 12건. (최대 12건)
@@ -1133,8 +1238,15 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
   SMM, 디일렉, 더구루) 기사를 우선 검토할 것.
 - 성일하이텍 관련 기사가 있으면 반드시 포함.
 - 배터리 밸류체인과 무관한 기사 제외 (LNG·석유·태양전지·반도체·디스플레이).
-- 태그: 원재료 및 시황 / 투자 및 M&A / 정책 및 규제 /
-        공급망 및 파트너십 / 기술 및 공정 중 정확히 하나.
+- 태그 판별 (반드시 하나만):
+  · 원재료 및 시황 — 가격·수급·재고·생산량 변동이 기사의 핵심일 때
+  · 정책 및 규제 — 법령·행정조치·수출입 제한·인허가가 핵심.
+                   가격이 언급돼도 제도가 주제면 여기
+  · 공급망 및 파트너십 — 계약·MOU·JV·공급 개시·수주·턴키
+  · 투자 및 M&A — 지분 인수·자금 조달·펀딩·증설 투자 결정
+  · 기술 및 공정 — 신공법·수율·설비·소재 개발
+  ※ 수주·계약은 M&A가 아니라 공급망. 자금 조달은 정책이 아니라 투자.
+  ※ 시장 통계·판매 실적은 정책이 아님. 해당 없으면 선별에서 제외.
 - 금지: 증권리포트/주가/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰
 - 금지: 본문에 언급된 발표일이 14일 이상 지난 기사
 
@@ -1146,12 +1258,17 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 [요약기준] 3문장 이내. 기관명·기업명·금액·수치·날짜 필수. 추상적 요약 금지.
 계획≠실행, MOU≠계약, 검토≠확정.
 
-[트렌드 3개] 한국/중국/미국EU 균형. 오늘 기사 수치·정책명 직접 인용.
+[트렌드 2~3개] 오늘 기사에서 실제로 흐름이 보인 것만.
+억지로 3개를 채우지 말 것. 기사 수치·정책명 직접 인용.
+배터리 재활용·원료 공급망과 무관한 주제(발전소 EPC·시공, 충전 인프라,
+신차 출시, 수소, 태양광)는 트렌드로 쓰지 말 것.
+단, ESS·전기차 시장 규모와 셀 수주·증설은 향후 폐배터리 발생량을
+결정하므로 중요한 트렌드로 다룰 것.
 {price_guide}
 
 JSON:
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
-articles 최대 12건. trends 3개. insights 4~6개. 모든 텍스트 한국어."""
+articles 최대 12건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     cfg   = genai.GenerationConfig(response_mime_type="application/json", temperature=0.2)
@@ -1868,6 +1985,16 @@ async def main():
 
     articles = await enrich_articles(articles)
     data     = analyze(articles, price_data=price_data, usd_cny=usd_cny)
+
+    from collections import Counter
+    arts = data.get("articles", [])
+    print(f"\n[선별 결과] {len(arts)}건")
+    for t, n in Counter(a.get("tag", "?") for a in arts).most_common():
+        print(f"  {t}: {n}건")
+    for a in arts:
+        print(f"  [{a.get('tag','?')[:8]:<8}] {a.get('title','')[:50]}")
+    print(f"[트렌드] {len(data.get('trends', []))}개  "
+          f"[시사점] {len(data.get('insights', []))}개")
 
     hist = append_price_history(price_data, usd_cny)
 
