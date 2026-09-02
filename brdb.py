@@ -521,12 +521,12 @@ def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
                    existing_titles: list = None) -> list:
     RSS_URL = "https://rss.metal.com/news/the_latest.xml"
     RELEVANT_METALS = {
-        "new energy", "lithium battery", "nickel", "cobalt", "scrap metals",
+        "new energy", "lithium battery", "nickel", "cobalt",
     }
     SMM_KEYWORDS = {
         "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
         "cathode", "precursor", "sulfate", "hydroxide", "carbonate",
-        "mhp", "npi", "lfp", "ncm", "nca", "scrap", "smelter", "refinery",
+        "mhp", "npi", "lfp", "ncm", "nca", "black mass", "battery scrap",
     }
     existing_titles = existing_titles or []
 
@@ -950,7 +950,22 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
         if resp.status_code != 200:
             print(f"  [{source_fixed or url[:40]}] HTTP {resp.status_code}")
             return out
-        root = ET.fromstring(resp.content)
+        try:
+            root = ET.fromstring(resp.content)
+        except ET.ParseError as pe:
+            # 일부 매체는 XML이 깨진 채로 옴 → 유효한 <item> 구간만 복구
+            raw   = resp.content.decode("utf-8", errors="ignore")
+            items = re.findall(r"<item[\s>].*?</item>", raw, re.DOTALL)
+            if not items:
+                print(f"  [{source_fixed or url[:40]}] XML 파싱 실패: {pe}")
+                return out
+            patched = "<rss><channel>" + "".join(items) + "</channel></rss>"
+            try:
+                root = ET.fromstring(patched.encode("utf-8"))
+                print(f"  [{source_fixed or url[:40]}] XML 복구 ({len(items)}개 item)")
+            except ET.ParseError:
+                print(f"  [{source_fixed or url[:40]}] XML 복구 실패")
+                return out
 
         for entry in root.findall(".//item")[:max_items]:
             title = decode_entities((entry.findtext("title") or "").strip())
@@ -1099,15 +1114,17 @@ async def get_real_url(page, cbm_url):
     return final_url if "news.google.com" not in final_url else None
 
 
-TARGET_TOTAL = 25   # 본문 추출 총 건수
+TARGET_TOTAL = 50   # 본문 추출 총 건수
 MIN_SCORE    = 6    # 이 점수 미만은 제외
 
 async def enrich_articles(articles):
     for a in articles:
         a["score"] = relevance_score(a)
 
-    smm = sorted([a for a in articles if "SMM" in a.get("source", "")],
-                 key=lambda x: -x["score"])[:3]
+    # SMM도 점수 기준을 통과해야 함 (알루미늄·철스크랩 등 유입 차단)
+    smm = sorted([a for a in articles
+                  if "SMM" in a.get("source", "") and a["score"] >= MIN_SCORE + 6],
+                 key=lambda x: -x["score"])[:4]
 
     sk      = ["성일하이텍", "sungeel", "성일"]
     sungeel = [a for a in articles
@@ -1186,7 +1203,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
                 f"   출처:{a.get('source','불명')} | 날짜:{a.get('pub','')} | {du}")
         body = a.get("body", "") or a.get("snippet", "")
         if body:
-            line += f"\n   [본문]: {body[:2000]}"
+            line += f"\n   [본문]: {body[:1500]}"
         return line
 
     smm_sec = "\n\n".join(fmt_article(i, a) for i, a in enumerate(smm_articles))
@@ -1232,7 +1249,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
   증설은 중요. 단, 발전소 EPC·시공·계통연계 등 전력 인프라 사업은 무관.
 
 [필수 선별 규칙]
-- 오늘 실제로 중요한 기사만 선택. 4건이면 4건, 12건이면 12건. (최대 12건)
+- 오늘 실제로 중요한 기사만 선택. 5건이면 5건, 25건이면 25건. (최대 25건)
   건수를 채우기 위해 관련도 낮은 기사를 넣지 말 것.
 - 전문지(Batteries News, Charged EVs, electrive, Energy Storage News,
   SMM, 디일렉, 더구루) 기사를 우선 검토할 것.
@@ -1268,7 +1285,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 
 JSON:
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
-articles 최대 12건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
+articles 최대 25건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     cfg   = genai.GenerationConfig(response_mime_type="application/json", temperature=0.2)
@@ -1567,7 +1584,7 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
         arts = by_tag.get(tag)
         if not arts:
             continue
-        head, rest = arts[:3], arts[3:]
+        head, rest = arts[:2], arts[2:]
         rest_html = ""
         if rest:
             rest_html = f"""
@@ -1634,7 +1651,7 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
 
   <h2 class="sec">분야별 기사</h2>
   <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">
-    분야별 상위 3건 표시 · 나머지는 펼쳐서 확인</div>
+    분야별 상위 2건 표시 · 나머지는 펼쳐서 확인</div>
   {sections or '<p style="color:#94a3b8;font-size:13px;">기사 없음</p>'}
 
   <h2 class="sec">오늘의 산업 흐름</h2>
@@ -1876,7 +1893,7 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
       </table>
       <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        분야별 상위 3건 + 펼쳐보기 · 30일 시세 추이</p>
+        분야별 상위 2건 + 펼쳐보기 · 30일 시세 추이</p>
     </td>
   </tr>"""
 
