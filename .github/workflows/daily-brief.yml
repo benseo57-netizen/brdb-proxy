@@ -8,6 +8,9 @@ on:
 jobs:
   send-brief:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # docs/ 커밋을 위해 필요
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,9 +27,17 @@ jobs:
 
       - name: 브리핑 실행
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          BCC_EMAIL: ${{ secrets.BCC_EMAIL }}
+          TO_EMAIL:           ${{ secrets.TO_EMAIL }}
+          BCC_EMAIL:          ${{ secrets.BCC_EMAIL }}
         run: python brdb.py
+
+      - name: 웹 페이지 커밋
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git diff --staged --quiet || git commit -m "brief $(date +%F)"
+          git push
