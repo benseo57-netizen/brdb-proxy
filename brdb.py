@@ -322,7 +322,35 @@ _SCORE_PENALTY = [
     ("warranty", -8), ("보증", -6),
 ]
 
-_ALL_SCORES = _SCORE_CORE + _SCORE_METAL + _SCORE_POLICY + _SCORE_COMPANY + _SCORE_PENALTY
+# 성일 사업 구조에 직접 영향을 주는 사건
+# ("재활용"이라는 단어가 없어도 원료 조달·거점 운영에 직결되는 것들)
+_SCORE_STRUCTURE = [
+    # 해외법인 소재지 — 현지 사건은 직접 영향
+    ("인디애나", 12), ("indiana", 12),
+    ("헝가리", 10), ("hungary", 10), ("ungarn", 10),
+    ("폴란드", 10), ("poland", 10), ("polen", 10),
+    ("말레이시아", 8), ("malaysia", 8),
+    ("인도네시아", 7), ("indonesia", 7),
+    ("군산", 4), ("새만금", 4),
+
+    # 셀사 가동 상황 = 스크랩 발생원 변화
+    ("가동 중단", 10), ("가동중단", 10), ("생산 차질", 10),
+    ("halted", 9), ("suspend", 8), ("shutdown", 9), ("셧다운", 9),
+    ("공장 중단", 10), ("감산", 8), ("가동률", 7), ("증산", 6),
+    ("공장 신설", 7), ("라인 전환", 7), ("전환 투자", 7),
+
+    # 공급망 재편 — 성일 사업 환경 자체가 바뀌는 사건
+    ("중국 의존", 10), ("탈중국", 10), ("de-risking", 8),
+    ("현지화", 8), ("내재화", 9), ("수직계열화", 9),
+    ("공급망 재편", 10), ("공급망 다변화", 9), ("공급망 안보", 8),
+    ("장기 공급", 7), ("장기계약", 7), ("offtake", 8), ("long-term supply", 7),
+    ("지분 인수", 7), ("지분 투자", 6), ("합작법인", 7),
+    ("정제", 6), ("refining", 6), ("제련", 6), ("smelting", 5),
+    ("원료 확보", 8), ("원재료 확보", 8), ("소재 확보", 7),
+]
+
+_ALL_SCORES = (_SCORE_CORE + _SCORE_METAL + _SCORE_POLICY +
+               _SCORE_COMPANY + _SCORE_STRUCTURE + _SCORE_PENALTY)
 
 
 def relevance_score(article: dict) -> int:
@@ -1114,7 +1142,7 @@ async def get_real_url(page, cbm_url):
     return final_url if "news.google.com" not in final_url else None
 
 
-TARGET_TOTAL = 50   # 본문 추출 총 건수
+TARGET_TOTAL = 80   # 본문 추출 상한 (실제로는 후보 수만큼)
 MIN_SCORE    = 6    # 이 점수 미만은 제외
 
 async def enrich_articles(articles):
@@ -1247,9 +1275,17 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
   특히 ESS는 최근 전기차를 능가하는 성장세로, LFP 기반 대형 ESS 확대는
   중장기 원료 발생원이자 셀 공정 스크랩 발생원. 셀 제조사의 ESS 수주·
   증설은 중요. 단, 발전소 EPC·시공·계통연계 등 전력 인프라 사업은 무관.
+- 해외법인: 인디애나(미국), 헝가리, 폴란드, 인도, 말레이시아, 중국.
+  해당 국가의 배터리·소재 산업 사건은 현지 법인 운영에 직접 영향.
+- ★ "재활용"이라는 단어가 없어도 아래는 핵심 기사로 취급할 것:
+  · 셀 제조사 공장 가동중단·감산·증설 (스크랩 발생량 변동)
+  · 공급망 재편·중국 의존 탈피·소재 내재화 (사업 환경 변화)
+  · 원료 장기공급 계약·offtake·지분 인수
+  · 성일 해외법인 소재국의 배터리 산업 동향
 
 [필수 선별 규칙]
-- 오늘 실제로 중요한 기사만 선택. 5건이면 5건, 25건이면 25건. (최대 25건)
+- 오늘 실제로 중요한 기사만 선택. 8건이면 8건, 40건이면 40건. (최대 40건)
+  분야별 균등 배분을 강제하지 말 것. 정책이 많은 날은 정책이 많아도 됨.
   건수를 채우기 위해 관련도 낮은 기사를 넣지 말 것.
 - 전문지(Batteries News, Charged EVs, electrive, Energy Storage News,
   SMM, 디일렉, 더구루) 기사를 우선 검토할 것.
@@ -1285,7 +1321,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 
 JSON:
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
-articles 최대 25건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
+articles 최대 40건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
     cfg   = genai.GenerationConfig(response_mime_type="application/json", temperature=0.2)
@@ -1561,9 +1597,9 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
 
     def card(a, compact=False):
         url = esc(a.get("real_url") or a.get("link", ""))
-        pad = "12px 14px" if compact else "20px"
-        fs  = "14px" if compact else "16px"
-        summary = "" if compact else (
+        pad = "16px 18px" if compact else "20px"
+        fs  = "15px" if compact else "16px"
+        summary = (
             f'<p style="font-size:14px;color:#475569;line-height:1.65;margin:8px 0 0;">'
             f'{esc(a.get("summary",""))}</p>')
         return f"""
@@ -1584,7 +1620,7 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
         arts = by_tag.get(tag)
         if not arts:
             continue
-        head, rest = arts[:2], arts[2:]
+        head, rest = arts[:3], arts[3:]
         rest_html = ""
         if rest:
             rest_html = f"""
@@ -1651,7 +1687,7 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
 
   <h2 class="sec">분야별 기사</h2>
   <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">
-    분야별 상위 2건 표시 · 나머지는 펼쳐서 확인</div>
+    분야별 상위 3건 표시 · 4번째부터는 펼쳐서 확인</div>
   {sections or '<p style="color:#94a3b8;font-size:13px;">기사 없음</p>'}
 
   <h2 class="sec">오늘의 산업 흐름</h2>
@@ -1893,7 +1929,7 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
       </table>
       <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        분야별 상위 2건 + 펼쳐보기 · 30일 시세 추이</p>
+        분야별 상위 3건 + 펼쳐보기 · 30일 시세 추이</p>
     </td>
   </tr>"""
 
