@@ -168,6 +168,13 @@ NOISE_KEYWORDS = [
     "photovoltaic", "wind power", "wasserstoff",
     # 보증·보험
     "보증 연장", "warranty", "versicherung", "garantie",
+    # 생활 폐기물·소방·시민 캠페인 (사업과 무관)
+    "firefighter", "소방", "화재 진압", "불이 나", "전소", "굴삭기",
+    "binman", "waste bin", "kerbside", "household waste", "종량제",
+    "1회용컵", "일회용컵", "분리배출", "시민 참여", "캠페인",
+    "urges residents", "recycling centre fire", "landfill",
+    # 완성차 모델·판매 실적
+    "kei car", "scenic", "practice squad", "colts", "nfl", "nba",
 ]
 
 NOISE_SOURCES = [
@@ -326,7 +333,8 @@ _SCORE_PENALTY = [
 # ("재활용"이라는 단어가 없어도 원료 조달·거점 운영에 직결되는 것들)
 _SCORE_STRUCTURE = [
     # 해외법인 소재지 — 현지 사건은 직접 영향
-    ("인디애나", 12), ("indiana", 12),
+    ("인디애나", 12), ("indiana battery", 12), ("indiana plant", 12),
+    ("indianapolis", -15),   # 미식축구 등 오탐 차단
     ("헝가리", 10), ("hungary", 10), ("ungarn", 10),
     ("폴란드", 10), ("poland", 10), ("polen", 10),
     ("말레이시아", 8), ("malaysia", 8),
@@ -1143,7 +1151,7 @@ async def get_real_url(page, cbm_url):
 
 
 TARGET_TOTAL = 80   # 본문 추출 상한 (실제로는 후보 수만큼)
-MIN_SCORE    = 6    # 이 점수 미만은 제외
+MIN_SCORE    = 10   # 이 점수 미만은 제외
 
 async def enrich_articles(articles):
     for a in articles:
@@ -1300,6 +1308,8 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
   · 기술 및 공정 — 신공법·수율·설비·소재 개발
   ※ 수주·계약은 M&A가 아니라 공급망. 자금 조달은 정책이 아니라 투자.
   ※ 시장 통계·판매 실적은 정책이 아님. 해당 없으면 선별에서 제외.
+  ※ 어느 태그에도 명확히 속하지 않으면 그 기사는 선택하지 말 것.
+     "정책 및 규제"를 애매한 기사의 기본값으로 쓰지 말 것.
 - 금지: 증권리포트/주가/IR공시/유상증자/ETF/신차리뷰/PR배포/스마트폰
 - 금지: 본문에 언급된 발표일이 14일 이상 지난 기사
 
