@@ -1,31 +1,33 @@
-name: Battery Daily Brief
+name: Battery Recycling Daily Brief
 
 on:
   schedule:
-    - cron: '13 2 * * 1-5'
-  workflow_dispatch:
+    # UTC 02:37 = KST 11:37 (평일)
+    # SMM 코발트 갱신(11:30 KST) 이후 + GFEX 1절 장중(10:00~11:15 KST)
+    # 러너 지연이 붙으면 실제 실행은 11:37~13:00 KST 사이
+    - cron: '37 2 * * 1-5'
+  workflow_dispatch:        # 수동 실행 버튼
 
 jobs:
   send-brief:
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # docs/ 커밋을 위해 필요
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Python 설정
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: 패키지 설치
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Playwright 브라우저 설치
+      - name: Install Chromium
         run: playwright install chromium
 
-      - name: 브리핑 실행
+      - name: Run BRDB
         env:
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
@@ -34,10 +36,11 @@ jobs:
           BCC_EMAIL:          ${{ secrets.BCC_EMAIL }}
         run: python brdb.py
 
-      - name: 웹 페이지 커밋
+      - name: Commit results
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/
           git diff --staged --quiet || git commit -m "brief $(date +%F)"
+          git pull --rebase --autostash
           git push
