@@ -13,9 +13,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 
+
 def now_kst() -> datetime:
     """GitHub Actions는 UTC 서버 → KST(+9h) 보정."""
     return datetime.utcnow() + timedelta(hours=9)
+
 
 from playwright.async_api import async_playwright
 import google.generativeai as genai
@@ -53,7 +55,8 @@ SPOT_TARGETS = [
 
 FUTURES_EM = [
     {"name": "탄산리튬 선물", "exchange": "GFEX",
-     "url": "https://www.metal.com/gfex", "ticker": "LCM", "method": "playwright"},
+     "url": "https://quote.eastmoney.com/qihuo/lcm.html",
+     "ticker": "LC 주력연속", "method": "eastmoney"},
     {"name": "니켈 선물", "exchange": "LME",
      "ticker": "LME·3M", "method": "metalradar"},
 ]
@@ -68,7 +71,6 @@ WEATHER_SPOTS = [
 # ============================================================
 # 피드 정의 (Inoreader 구독 기반)
 # ============================================================
-
 # 배터리/EV 전문지 → 화이트리스트 통과 불필요
 PUBLISHER_FEEDS_SPECIAL = [
     {"url": "https://batteriesnews.com/feed/",       "source": "Batteries News",      "lang": "en"},
@@ -233,8 +235,10 @@ _NOISE_RE_EN = re.compile(
     re.IGNORECASE
 )
 
+
 def is_stock_noise(title: str) -> bool:
     return bool(_NOISE_RE_KO.search(title) or _NOISE_RE_EN.search(title))
+
 
 WHITELIST = [
     "battery", "배터리", "전지", "이차전지", "사용후배터리", "폐배터리",
@@ -340,13 +344,11 @@ _SCORE_STRUCTURE = [
     ("말레이시아", 8), ("malaysia", 8),
     ("인도네시아", 7), ("indonesia", 7),
     ("군산", 4), ("새만금", 4),
-
     # 셀사 가동 상황 = 스크랩 발생원 변화
     ("가동 중단", 10), ("가동중단", 10), ("생산 차질", 10),
     ("halted", 9), ("suspend", 8), ("shutdown", 9), ("셧다운", 9),
     ("공장 중단", 10), ("감산", 8), ("가동률", 7), ("증산", 6),
     ("공장 신설", 7), ("라인 전환", 7), ("전환 투자", 7),
-
     # 공급망 재편 — 성일 사업 환경 자체가 바뀌는 사건
     ("중국 의존", 10), ("탈중국", 10), ("de-risking", 8),
     ("현지화", 8), ("내재화", 9), ("수직계열화", 9),
@@ -375,8 +377,8 @@ def relevance_score(article: dict) -> int:
     title = article.get("title", "").lower()
     if any(kw in title for kw, _ in _SCORE_CORE[:8]):
         score += 5
-
     return score
+
 
 # 중복 판정 제외 불용어
 _STOPWORDS = {
@@ -386,16 +388,19 @@ _STOPWORDS = {
     "안","및","등","것","수","위","더","이","그","저","중","해","때","약",
 }
 
+
 # ============================================================
 # 유틸
 # ============================================================
 def decode_entities(text):
     return html_lib.unescape(text or "")
 
+
 def esc(text):
     return (str(text or "")
             .replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
 
 def _to_naive_utc(dt):
     """tz-aware면 UTC로 변환 후 naive화. naive면 이미 UTC로 간주."""
@@ -409,8 +414,6 @@ def _to_naive_utc(dt):
 def parse_date(pub_str):
     """RSS pubDate → naive UTC datetime.
     시간대 오프셋(+0900, -0400 등)을 반드시 UTC로 환산한다.
-    (환산하지 않으면 한국 기사가 9시간 최신으로,
-     미국 기사가 4시간 오래된 것으로 잘못 인식됨)
     """
     if not pub_str:
         return None
@@ -424,6 +427,7 @@ def parse_date(pub_str):
     except Exception:
         return None
 
+
 def extract_real_url(url):
     if "google.com/url" in url:
         m = re.search(r'[?&]url=([^&]+)', url)
@@ -431,9 +435,11 @@ def extract_real_url(url):
             return urllib.parse.unquote(m.group(1))
     return url
 
+
 def _sig_words(title: str) -> set:
     ws = re.sub(r'[^\w\s]', ' ', title.lower()).split()
     return {w for w in ws if len(w) >= 2 and w not in _STOPWORDS}
+
 
 def get_cutoff_utc() -> datetime:
     """평일: 어제 00:00 KST / 월요일: 3일 전 (주말 뉴스 포함)"""
@@ -444,15 +450,89 @@ def get_cutoff_utc() -> datetime:
                  - timedelta(days=back_days)
     return base_kst - kst_offset
 
+
 def _fmt(val, prefix="") -> str:
     if val is None:
         return "—"
     return f"{prefix}{val:,.0f}"
 
+
 def _pct_color(pct: str) -> str:
     if not pct or pct == "N/A":
         return "#888888"
     return "#c0392b" if "+" in pct else "#2471a3"
+
+
+# ------------------------------------------------------------
+# 시세 기준 시점 표기
+# ------------------------------------------------------------
+_MON3 = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+         "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+
+
+def parse_quote_date(s: str):
+    """'Sep 03, 2026'(SMM) / '02. September 2026'(westmetall) → datetime"""
+    if not s:
+        return None
+    s = s.strip()
+    m = re.match(r"([A-Za-z]{3,})\s+(\d{1,2}),\s*(\d{4})", s)
+    if m:
+        mon, day, yr = m.group(1), m.group(2), m.group(3)
+    else:
+        m = re.match(r"(\d{1,2})\.\s*([A-Za-z]{3,})\s*(\d{4})", s)
+        if not m:
+            return None
+        day, mon, yr = m.group(1), m.group(2), m.group(3)
+    mi = _MON3.get(mon[:3].lower())
+    if not mi:
+        return None
+    try:
+        return datetime(int(yr), mi, int(day))
+    except ValueError:
+        return None
+
+
+def make_basis(date_str: str = None, suffix: str = "고시",
+               realtime: bool = False, force: tuple = None) -> tuple:
+    """(배지 문구, 이상여부) — 기준일을 그대로 노출하고,
+       비정상적으로 오래된 경우에만 경고색.
+       주말(월요일 실행 시 금요일=3일) + 공휴일 여유 → 4일부터 경고."""
+    if force:
+        return force
+    if realtime:
+        return (now_kst().strftime("%m.%d %H:%M KST"), False)
+    d = parse_quote_date(date_str)
+    if d is None:
+        return ("기준일 불명", True)
+    lag = (now_kst().date() - d.date()).days
+    return (f"{d.month:02d}.{d.day:02d} {suffix}", lag >= 4)
+
+
+def _em_basis(ts_cst: str) -> tuple:
+    """eastmoney 표기 시각(북경시) → KST 배지 문구"""
+    if not ts_cst:
+        return ("기준시각 불명", True)
+    try:
+        t = datetime.strptime(ts_cst, "%Y-%m-%d %H:%M:%S") + timedelta(hours=1)
+    except ValueError:
+        return ("기준시각 불명", True)
+    label = f"{t.month:02d}.{t.day:02d} {t.strftime('%H:%M')} KST"
+    if (now_kst().date() - t.date()).days >= 1:
+        return (f"{label} 전일", True)
+    age = (now_kst() - t).total_seconds() / 60
+    return ((f"{label} 장중", False) if age <= 30 else (f"{label} 장외", False))
+
+
+def _basis_badge(text: str, stale: bool = False) -> str:
+    """당일=파랑 / 이상=노랑"""
+    if not text:
+        return ""
+    bg, fg = ("#fef3c7", "#92400e") if stale else ("#e0f2fe", "#075985")
+    return (f'<span style="display:inline-block;background:{bg};color:{fg};'
+            f'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+            f'margin-left:4px;vertical-align:middle;white-space:nowrap;">'
+            f'{esc(text)}</span>')
+
 
 # ============================================================
 # SMM 시세 수집
@@ -500,163 +580,85 @@ async def _scrape_spot(page, target: dict) -> dict:
         usd_metal = round(usd_excl / mc) if (usd_excl and mc) else None
         cny_metal = round(cny_excl / mc) if (cny_excl and mc) else None
 
+        date_txt     = date_m.group(1) if date_m else "N/A"
+        basis, stale = make_basis(date_txt, "고시")
+
         return {
             **base,
-            "date":          date_m.group(1) if date_m else "N/A",
+            "date":          date_txt,
             "usd_excl":      usd_excl,  "cny_incl": cny_incl, "cny_excl": cny_excl,
             "usd_metal":     usd_metal, "cny_metal": cny_metal,
             "metal_content": mc, "metal_label": ml,
-            "change_pct":    change_pct, "status": "OK",
+            "change_pct":    change_pct,
+            "basis":         basis, "delayed": stale,
+            "status":        "OK",
         }
     except Exception as e:
         return {**base, "status": f"ERROR: {e}"}
 
 
-_LCM_JS = """
+# ------------------------------------------------------------
+# GFEX 탄산리튬 — eastmoney (quote.eastmoney.com/qihuo/lcm.html)
+# ------------------------------------------------------------
+_EM_JS = r"""
 () => {
-    const raw = (document.body ? document.body.innerText : '').replace(/[,]/g, '');
-    let price = null, pricePos = -1, pos = 0;
-    while (pos < raw.length) {
-        const m = raw.slice(pos).match(/\\b([1-3]\\d{5})\\b/);
-        if (!m) break;
-        const n = parseInt(m[1]);
-        if (n >= 100000 && n <= 300000) { price = n; pricePos = pos + m.index; break; }
-        pos += m.index + m[1].length;
-    }
-    if (price === null) return { price: null, pct: 'N/A' };
-    const win = raw.substring(Math.max(0, pricePos - 80), pricePos + 250);
-    const all = [...win.matchAll(/([+\\-]?\\d+\\.\\d+)\\s*%/g)];
-    for (const m2 of all) {
-        const v = parseFloat(m2[1]);
-        if (Math.abs(v) > 0 && Math.abs(v) < 25) {
-            return { price: price, pct: (v >= 0 ? '+' : '') + v.toFixed(2) + '%' };
-        }
-    }
-    return { price: price, pct: 'N/A' };
+  const t = document.body.innerText.replace(/,/g, '');
+  const num = (label) => {
+    const m = t.match(new RegExp(label + '[\\s:：]*(-?\\d+(?:\\.\\d+)?)'));
+    return m ? parseFloat(m[1]) : null;
+  };
+  const tm = t.match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/);
+  const pm = t.match(/涨幅[\s:：]*(-?\d+(?:\.\d+)?)\s*%/);
+  const sm = t.match(/(?<![昨前])结算[\s:：]*(\d+(?:\.\d+)?)/);
+
+  let last = num('最新');
+  if (last === null) {                       // 폴백: 상단 대표가
+    const c = [...t.matchAll(/\b(\d{5,6})\b/g)]
+      .map(m => parseInt(m[1])).filter(n => n > 30000 && n < 500000);
+    last = c.length ? c[0] : null;
+  }
+  return {
+    ts:     tm ? tm[1] : null,
+    last:   last,
+    prev:   num('昨结算'),
+    settle: sm ? parseFloat(sm[1]) : null,
+    pct:    pm ? pm[1] : null,
+  };
 }
 """
 
-async def _scrape_lcm_playwright(page, target: dict) -> dict:
-    display = f"{target['exchange']}·{target['ticker']}"
-    base    = {"name": target["name"], "exchange": target["exchange"], "ticker": display}
+
+async def _scrape_em_futures(page, target: dict) -> dict:
+    base = {"name": target["name"], "exchange": target["exchange"],
+            "ticker": target["ticker"]}
     try:
-        await page.goto(target["url"], wait_until="domcontentloaded", timeout=25000)
-        await page.wait_for_timeout(4000)
-        try:
-            await page.evaluate("window.stop()")
-        except Exception:
-            pass
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(5000)
 
-        result     = await page.evaluate(_LCM_JS)
-        price      = result.get("price") if result else None
-        change_pct = result.get("pct", "N/A") if result else "N/A"
-        print(f"  metal.com/gfex LCM: price={price}, pct={change_pct}")
+        r    = await page.evaluate(_EM_JS)
+        last = r.get("last")
+        if last is None or not (30_000 < last < 500_000):
+            return {**base, "status": f"ERROR: 가격 파싱 실패({last})"}
 
-        if price:
-            return {
-                **base,
-                "date":            now_kst().strftime("%b %d, %Y"),
-                "latest":          price,
-                "latest_vat_excl": round(price / VAT_RATE),
-                "change_pct":      change_pct,
-                "prev_close":      None,
-                "status":          "OK",
-            }
+        p   = r.get("pct")
+        pct = "N/A" if p is None else (f"+{p}%" if float(p) >= 0 else f"{p}%")
+        basis, stale = _em_basis(r.get("ts"))
+        print(f"  eastmoney LCM: {last} / {pct} / {r.get('ts')} CST")
+
+        return {
+            **base, "source": "eastmoney",
+            "date":            (r.get("ts") or "")[:10],
+            "latest":          round(last),
+            "latest_vat_excl": round(last / VAT_RATE),
+            "change_pct":      pct,
+            "settle":          r.get("settle"),
+            "prev_settle":     r.get("prev"),
+            "basis":           basis, "delayed": stale,
+            "status":          "OK",
+        }
     except Exception as e:
-        print(f"  metal.com/gfex 오류: {e}")
-    return {**base, "status": "ERROR: 가격 파싱 실패"}
-
-
-def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
-                   existing_titles: list = None) -> list:
-    RSS_URL = "https://rss.metal.com/news/the_latest.xml"
-    RELEVANT_METALS = {
-        "new energy", "lithium battery", "nickel", "cobalt",
-    }
-    SMM_KEYWORDS = {
-        "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
-        "cathode", "precursor", "sulfate", "hydroxide", "carbonate",
-        "mhp", "npi", "lfp", "ncm", "nca", "black mass", "battery scrap",
-    }
-    existing_titles = existing_titles or []
-
-    def _parse_pubdate(s: str):
-        try:
-            return datetime.strptime(s.strip(), "%H:%M:%S %b %d, %Y")
-        except Exception:
-            return None
-
-    def _title_dup(title: str) -> bool:
-        wn = _sig_words(title)
-        return any(len(wn & _sig_words(t)) >= 4 for t in existing_titles)
-
-    try:
-        resp = requests.get(RSS_URL, timeout=15,
-                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        if resp.status_code != 200:
-            print(f"  SMM RSS: HTTP {resp.status_code}")
-            return []
-
-        root = ET.fromstring(resp.content)
-        articles = []
-        sk_metal = sk_date = sk_dup = 0
-
-        for item in root.findall(".//item"):
-            metal_el   = item.find("metal")
-            metal_text = (metal_el.text or "").lower() if metal_el is not None else ""
-            metals     = {m.strip() for m in metal_text.split(",")}
-            if not (metals & RELEVANT_METALS):
-                sk_metal += 1
-                continue
-
-            title_el = item.find("title")
-            title    = (title_el.text or "").strip() if title_el is not None else ""
-            if not title:
-                continue
-
-            pub_el   = item.find("pubDate")
-            pub_str  = (pub_el.text or "").strip() if pub_el is not None else ""
-            pub_date = _parse_pubdate(pub_str)
-            if pub_date is None:
-                sk_date += 1
-                continue
-            smm_cutoff = (cutoff - timedelta(hours=8)) if cutoff else None
-            if smm_cutoff and pub_date < smm_cutoff:
-                sk_date += 1
-                continue
-
-            link_el = item.find("link")
-            link    = (link_el.text or "").strip() if link_el is not None else ""
-            if not link:
-                continue
-
-            desc_el = item.find("description")
-            snippet = (desc_el.text or "").strip()[:400] if desc_el is not None else ""
-
-            combined = (title + " " + snippet).lower()
-            if not any(k in combined for k in SMM_KEYWORDS):
-                sk_metal += 1
-                continue
-
-            if _title_dup(title):
-                sk_dup += 1
-                continue
-
-            articles.append({
-                "title": title, "link": link, "snippet": snippet,
-                "source": "SMM Metal", "priority": False,
-                "pub_date": pub_date, "pub": pub_date.strftime("%Y-%m-%d"),
-                "lang": "en",
-            })
-            existing_titles.append(title)
-            if len(articles) >= max_fetch:
-                break
-
-        print(f"  SMM RSS: {len(articles)}건 (제외 {sk_metal}/{sk_date}/{sk_dup})")
-        return articles
-    except Exception as e:
-        print(f"  SMM RSS 오류: {e}")
-        return []
+        print(f"  eastmoney 오류: {e}")
+        return {**base, "status": f"ERROR: {e}"}
 
 
 def _fetch_westmetall_ni3m() -> dict:
@@ -688,7 +690,9 @@ def _fetch_westmetall_ni3m() -> dict:
 
         cash_pct = (cash_t1 - cash_t2) / cash_t2 * 100
         m3_pct   = (m3_t1 - m3_t2) / m3_t2 * 100
-        print(f"  westmetall Cash ${cash_t1:,.0f} ({cash_pct:+.2f}%) 3M ${m3_t1:,.0f}")
+        print(f"  westmetall [{date_t1}] Cash ${cash_t1:,.0f} "
+              f"({cash_pct:+.2f}%) 3M ${m3_t1:,.0f}")
+
         return {"cash": cash_t1, "cash_pct": f"{cash_pct:+.2f}%",
                 "m3": m3_t1, "m3_pct": f"{m3_pct:+.2f}%", "date": date_t1}
     except Exception as e:
@@ -700,6 +704,7 @@ async def _scrape_metalradar_ni3m(page) -> dict:
     result = _fetch_westmetall_ni3m()
     if result:
         return result
+
     print("  westmetall 실패 → metalradar 시도...")
     try:
         await page.goto(
@@ -713,7 +718,8 @@ async def _scrape_metalradar_ni3m(page) -> dict:
         ask = float(m_ask.group(1).replace(",", ""))
         if not (15_000 < ask < 25_000):
             return {}
-        return {"m3": ask, "m3_pct": "N/A", "date": now_kst().strftime("%d. %b %Y")}
+        return {"m3": ask, "m3_pct": "N/A",
+                "date": now_kst().strftime("%d. %b %Y"), "live": True}
     except Exception as e:
         print(f"  metalradar 오류: {e}")
         return {}
@@ -762,10 +768,12 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
     if wm:
         lme_ni        = {"cash": wm["cash"], "cash_pct": wm["cash_pct"], "date": wm["date"]}
         ni3m_prefetch = wm
+        cash_basis    = make_basis(wm["date"], "종가")
         print("OK (westmetall)")
     else:
         lme_ni        = _fetch_lme_nickel_kpi()
         ni3m_prefetch = None
+        cash_basis    = ("전일 종가", True)
         print("OK (kpi)" if lme_ni else "W 실패")
 
     CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
@@ -791,7 +799,9 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                         "cny_incl": None, "cny_excl": round(lme_ni["cash"] * usd_cny),
                         "usd_metal": None, "cny_metal": None,
                         "metal_content": None, "metal_label": None,
-                        "change_pct": lme_ni["cash_pct"], "delayed": True, "status": "OK",
+                        "change_pct": lme_ni["cash_pct"],
+                        "basis": cash_basis[0], "delayed": cash_basis[1],
+                        "status": "OK",
                     })
                 else:
                     spot_results.append({"name": "니켈", "name_en": "LME Nickel",
@@ -808,8 +818,9 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
 
         for t in FUTURES_EM:
             print(f"  선물: {t['name']}({t['exchange']}) ...", end=" ", flush=True)
-            if t.get("method") == "playwright":
-                r = await _scrape_lcm_playwright(page, t)
+
+            if t.get("method") == "eastmoney":
+                r = await _scrape_em_futures(page, t)
                 futures_results.append(r)
                 print("OK" if r["status"] == "OK" else f"W {r['status']}")
                 try:
@@ -819,13 +830,17 @@ async def scrape_smm_prices(usd_cny: float = 7.25) -> dict:
                 browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
                 ctx     = await browser.new_context(user_agent=BROWSER_UA, locale="en-US")
                 page    = await ctx.new_page()
+
             elif t.get("method") == "metalradar":
                 if ni3m:
+                    b3 = (make_basis(realtime=True) if ni3m.get("live")
+                          else make_basis(ni3m["date"], "종가"))
                     r = {"name": t["name"], "exchange": "LME", "ticker": "LME·3M",
                          "source": "metalradar.com", "date": ni3m["date"],
                          "latest": round(ni3m["m3"]),
                          "latest_vat_excl": round(ni3m["m3"] * usd_cny),
-                         "change_pct": ni3m["m3_pct"], "delayed": True, "status": "OK"}
+                         "change_pct": ni3m["m3_pct"],
+                         "basis": b3[0], "delayed": b3[1], "status": "OK"}
                     print("OK")
                 else:
                     r = {"name": t["name"], "exchange": "LME", "ticker": "LME·3M",
@@ -868,6 +883,7 @@ def compute_spreads(price_data: dict) -> dict:
 
 def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> str:
     lines = [f"수집: {now_kst().strftime('%H:%M')} KST | USD/CNY: {usd_cny:.2f}"]
+
     lines.append("\n[현물 - 증치세제외 기준]")
     for r in price_data["spot"]:
         if r.get("status") != "OK":
@@ -876,7 +892,8 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
         if r.get("usd_metal"):
             ms = f" | {r['metal_label']}금속환산: ${r['usd_metal']:,.0f}"
         lines.append(f"  {r['name']}: ${r['usd_excl']:,.0f}/t{ms}"
-                     f" | CNY{r.get('cny_excl') or 0:,.0f} | {r['change_pct']}")
+                     f" | CNY{r.get('cny_excl') or 0:,.0f} | {r['change_pct']}"
+                     f" | 기준: {r.get('basis','N/A')}")
 
     lines.append("\n[선물 - 증치세제외 환산]")
     for r in price_data["futures"]:
@@ -885,7 +902,7 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
         ve = r.get("latest_vat_excl")
         ue = round(ve / usd_cny) if ve else None
         lines.append(f"  {r['name']}({r.get('ticker','')}): ${ue:,.0f} / CNY{ve:,.0f}"
-                     f" | {r['change_pct']}")
+                     f" | {r['change_pct']} | 기준: {r.get('basis','N/A')}")
 
     lines.append("\n[현선물 스프레드]")
     if "탄산리튬" in spreads:
@@ -895,13 +912,15 @@ def format_price_for_prompt(price_data: dict, usd_cny: float, spreads: dict) -> 
     if "니켈" in spreads:
         s = spreads["니켈"]
         lines.append(f"  니켈LME(3M): Cash${s['spot_metal']:,.0f} vs 3M${s['futures']:,.0f}"
-                     f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%) [T-1]")
+                     f" -> {s['structure']} ({s['spread']:+,.0f}, {s['spread_pct']:+.1f}%)")
+
     return "\n".join(lines)
 
 
 def append_price_history(price_data: dict, usd_cny: float) -> list:
     """당일 시세를 JSON에 누적하고 전체 이력 반환"""
     os.makedirs(os.path.dirname(PRICE_JSON), exist_ok=True)
+
     hist = []
     if os.path.exists(PRICE_JSON):
         try:
@@ -915,17 +934,23 @@ def append_price_history(price_data: dict, usd_cny: float) -> list:
     fut  = {r["exchange"]: r for r in (price_data or {}).get("futures", [])
             if r.get("status") == "OK"}
 
-    lc_ve = fut.get("GFEX", {}).get("latest_vat_excl")
+    gfex  = fut.get("GFEX", {}) or {}
+    lc_ve = gfex.get("latest_vat_excl")
+
     row = {
         "date":     now_kst().strftime("%Y-%m-%d"),
         "usd_cny":  round(usd_cny, 4),
         "ni":       spot.get("니켈", {}).get("usd_excl"),
         "ni_3m":    fut.get("LME", {}).get("latest"),
+        "ni_basis": spot.get("니켈", {}).get("basis"),
         "co":       spot.get("황산코발트", {}).get("usd_excl"),
         "co_metal": spot.get("황산코발트", {}).get("usd_metal"),
         "li_ind":   spot.get("공업용 탄산리튬", {}).get("usd_excl"),
         "li_bat":   spot.get("배터리용 탄산리튬", {}).get("usd_excl"),
         "lc_fut":   round(lc_ve / usd_cny) if lc_ve else None,
+        # 월물 교체 감지용 — 오늘 昨结算 != 어제 结算 이면 주력 월물이 바뀐 날
+        "lc_settle": gfex.get("settle"),
+        "lc_prev":   gfex.get("prev_settle"),
     }
 
     hist = [h for h in hist if h.get("date") != row["date"]]
@@ -934,8 +959,10 @@ def append_price_history(price_data: dict, usd_cny: float) -> list:
 
     with open(PRICE_JSON, "w", encoding="utf-8") as f:
         json.dump(hist, f, ensure_ascii=False, indent=1)
+
     print(f"  시세 이력 저장: {len(hist)}일치")
     return hist
+
 
 # ============================================================
 # 기사 수집
@@ -946,6 +973,7 @@ _CROSS_LANG_COMPANIES = [
     "catl", "byd", "panasonic", "ascend elements", "redwood materials",
     "cirba", "ecobat", "sungeel", "성일",
 ]
+
 
 def _pre_cluster_articles(articles: list) -> list:
     kept = []
@@ -1000,6 +1028,7 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
         if resp.status_code != 200:
             print(f"  [{source_fixed or url[:40]}] HTTP {resp.status_code}")
             return out
+
         try:
             root = ET.fromstring(resp.content)
         except ET.ParseError as pe:
@@ -1056,6 +1085,7 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
 
             if seen is not None:
                 seen.add(link)
+
             out.append({
                 "title": title, "link": link, "source": source,
                 "pub": (entry.findtext("pubDate") or "").strip(),
@@ -1065,6 +1095,100 @@ def _parse_feed(url: str, source_fixed: str = None, lang: str = "en",
     except Exception as e:
         print(f"  [{source_fixed or url[:40]}] 오류: {e}")
     return out
+
+
+def _fetch_smm_rss(max_fetch: int = 5, cutoff: datetime = None,
+                   existing_titles: list = None) -> list:
+    RSS_URL = "https://rss.metal.com/news/the_latest.xml"
+    RELEVANT_METALS = {
+        "new energy", "lithium battery", "nickel", "cobalt",
+    }
+    SMM_KEYWORDS = {
+        "nickel", "cobalt", "lithium", "battery", "recycl", "black mass",
+        "cathode", "precursor", "sulfate", "hydroxide", "carbonate",
+        "mhp", "npi", "lfp", "ncm", "nca", "battery scrap",
+    }
+    existing_titles = existing_titles or []
+
+    def _parse_pubdate(s: str):
+        try:
+            return datetime.strptime(s.strip(), "%H:%M:%S %b %d, %Y")
+        except Exception:
+            return None
+
+    def _title_dup(title: str) -> bool:
+        wn = _sig_words(title)
+        return any(len(wn & _sig_words(t)) >= 4 for t in existing_titles)
+
+    try:
+        resp = requests.get(RSS_URL, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        if resp.status_code != 200:
+            print(f"  SMM RSS: HTTP {resp.status_code}")
+            return []
+
+        root = ET.fromstring(resp.content)
+        articles = []
+        sk_metal = sk_date = sk_dup = 0
+
+        for item in root.findall(".//item"):
+            metal_el   = item.find("metal")
+            metal_text = (metal_el.text or "").lower() if metal_el is not None else ""
+            metals     = {m.strip() for m in metal_text.split(",")}
+            if not (metals & RELEVANT_METALS):
+                sk_metal += 1
+                continue
+
+            title_el = item.find("title")
+            title    = (title_el.text or "").strip() if title_el is not None else ""
+            if not title:
+                continue
+
+            pub_el   = item.find("pubDate")
+            pub_str  = (pub_el.text or "").strip() if pub_el is not None else ""
+            pub_date = _parse_pubdate(pub_str)
+            if pub_date is None:
+                sk_date += 1
+                continue
+
+            smm_cutoff = (cutoff - timedelta(hours=8)) if cutoff else None
+            if smm_cutoff and pub_date < smm_cutoff:
+                sk_date += 1
+                continue
+
+            link_el = item.find("link")
+            link    = (link_el.text or "").strip() if link_el is not None else ""
+            if not link:
+                continue
+
+            desc_el = item.find("description")
+            snippet = (desc_el.text or "").strip()[:400] if desc_el is not None else ""
+
+            combined = (title + " " + snippet).lower()
+            if not any(k in combined for k in SMM_KEYWORDS):
+                sk_metal += 1
+                continue
+
+            if _title_dup(title):
+                sk_dup += 1
+                continue
+
+            articles.append({
+                "title": title, "link": link, "snippet": snippet,
+                "source": "SMM Metal", "priority": False,
+                "pub_date": pub_date, "pub": pub_date.strftime("%Y-%m-%d"),
+                "lang": "en",
+            })
+            existing_titles.append(title)
+
+            if len(articles) >= max_fetch:
+                break
+
+        print(f"  SMM RSS: {len(articles)}건 (제외 {sk_metal}/{sk_date}/{sk_dup})")
+        return articles
+    except Exception as e:
+        print(f"  SMM RSS 오류: {e}")
+        return []
 
 
 def collect_rss():
@@ -1111,6 +1235,7 @@ def collect_rss():
         words = _sig_words(a["title"])
         if any(len(words & _sig_words(b["title"])) >= 5 for b in deduped):
             continue
+
         tl      = a["title"].lower()
         pub_day = a["pub_date"].strftime("%Y-%m-%d") if a.get("pub_date") else "unknown"
         is_dup  = False
@@ -1134,15 +1259,18 @@ def collect_rss():
 
     sc = sum(1 for a in deduped if "SMM" in a.get("source", ""))
     pc = sum(1 for a in deduped if a.get("priority"))
+
     dts = [a["pub_date"] for a in deduped if a.get("pub_date")]
     if dts:
         rng = (f"{(min(dts)+timedelta(hours=9)).strftime('%m-%d %H:%M')} ~ "
                f"{(max(dts)+timedelta(hours=9)).strftime('%m-%d %H:%M')} KST")
     else:
         rng = "날짜 없음"
+
     print(f"\n수집: {len(raw)}건 → 최종 {len(deduped)}건 (SMM:{sc} / 전문지:{pc})")
     print(f"  기사 날짜 범위: {rng}")
     return deduped
+
 
 # ============================================================
 # 본문 추출
@@ -1173,6 +1301,7 @@ async def get_real_url(page, cbm_url):
 
 TARGET_TOTAL = 80   # 본문 추출 상한 (실제로는 후보 수만큼)
 MIN_SCORE    = 10   # 이 점수 미만은 제외
+
 
 async def enrich_articles(articles):
     for a in articles:
@@ -1245,6 +1374,7 @@ async def enrich_articles(articles):
 
     return targets
 
+
 # ============================================================
 # Gemini 분석
 # ============================================================
@@ -1287,6 +1417,7 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
         price_guide = ""
 
     prompt = f"""당신은 배터리 재활용 산업 전문 시니어 애널리스트입니다. JSON만 출력하세요.
+
 오늘: {today}
 {price_sec}
 [SMM Metal 기사 최우선]
@@ -1349,9 +1480,9 @@ def analyze(articles, price_data: dict = None, usd_cny: float = 7.25):
 단, ESS·전기차 시장 규모와 셀 수주·증설은 향후 폐배터리 발생량을
 결정하므로 중요한 트렌드로 다룰 것.
 {price_guide}
-
 JSON:
 {{"articles":[{{"title":"","source":"","date":"","link":"","summary":"3문장이내 수치포함","tag":"원재료 및 시황|투자 및 M&A|정책 및 규제|공급망 및 파트너십|기술 및 공정","region":"한국|중국|미국|EU|일본|인도네시아|글로벌"}}],"trends":[{{"title":"","body":"2~3문장"}}],"insights":[""]}}
+
 articles 최대 40건. trends 2~3개. insights 4~6개. 모든 텍스트 한국어."""
 
     model = genai.GenerativeModel("gemini-2.5-flash")
@@ -1374,6 +1505,7 @@ articles 최대 40건. trends 2~3개. insights 4~6개. 모든 텍스트 한국�
                 time.sleep(w)
 
     raise Exception("Gemini 3회 실패")
+
 
 # ============================================================
 # 웹 페이지 생성
@@ -1401,6 +1533,7 @@ const CODE = {0:"맑음",1:"대체로 맑음",2:"구름 조금",3:"흐림",
   66:"어는 비",67:"어는 비",71:"약한 눈",73:"눈",75:"강한 눈",77:"싸락눈",
   80:"소나기",81:"소나기",82:"강한 소나기",85:"눈소나기",86:"눈소나기",
   95:"뇌우",96:"뇌우",99:"뇌우"};
+
 Promise.all(spots.map(s =>
   fetch("https://api.open-meteo.com/v1/forecast?latitude=" + s.lat
       + "&longitude=" + s.lon
@@ -1462,9 +1595,8 @@ _CHART_JS = """
     ds('Co 금속환산', D.co_metal, '#fbbf24', true)
   ]);
   draw('ch_li', [
-    ds('현물 BG',   D.li_bat, '#059669', false),
-    ds('현물 TG',   D.li_ind, '#6ee7b7', false),
-    ds('GFEX 선물', D.lc_fut, '#94a3b8', true)
+    ds('현물 BG', D.li_bat, '#059669', false),
+    ds('현물 TG', D.li_ind, '#6ee7b7', false)
   ]);
 })();
 """
@@ -1521,15 +1653,13 @@ def build_price_web(price_data: dict, usd_cny: float, hist: list,
 
     FAIL_TAG = (' <span style="background:#fee2e2;color:#b91c1c;font-size:9px;'
                 'padding:1px 5px;border-radius:3px;">수집실패</span>')
-    T1_TAG   = (' <span style="background:#fef3c7;color:#92400e;font-size:9px;'
-                'font-weight:700;padding:1px 5px;border-radius:3px;">T-1</span>')
 
     rows = ""
     for r in price_data.get("spot", []):
         if r.get("status") != "OK":
             rows += row(r.get("name", ""), r.get("name_en", ""), "—", "", "N/A", FAIL_TAG)
             continue
-        tag   = T1_TAG if r.get("delayed") else ""
+        tag   = _basis_badge(r.get("basis"), r.get("delayed"))
         extra = f" · {r['metal_label']} 환산 ${r['usd_metal']:,.0f}" if r.get("usd_metal") else ""
         rows += row(
             r["name"].replace("배터리용 ", "BG ").replace("공업용 ", "TG "),
@@ -1552,7 +1682,7 @@ def build_price_web(price_data: dict, usd_cny: float, hist: list,
             usd = round(cny / usd_cny) if cny else None
         rows += row(r["name"].replace(" 선물", ""), r.get("ticker", ""),
                     _fmt(usd, "$"), _fmt(cny, "CNY"), r.get("change_pct"),
-                    T1_TAG if r.get("delayed") else "")
+                    _basis_badge(r.get("basis"), r.get("delayed")))
 
     # --- 차트 ---
     recent = hist[-30:] if hist else []
@@ -1565,7 +1695,6 @@ def build_price_web(price_data: dict, usd_cny: float, hist: list,
         "co_metal": [h.get("co_metal") for h in recent],
         "li_ind":   [h.get("li_ind")   for h in recent],
         "li_bat":   [h.get("li_bat")   for h in recent],
-        "lc_fut":   [h.get("lc_fut")   for h in recent],
     }
 
     def canvas(cid, title, sub):
@@ -1578,14 +1707,14 @@ def build_price_web(price_data: dict, usd_cny: float, hist: list,
       </div>"""
 
     note = ("데이터가 하루치입니다. 며칠 누적되면 추세가 보입니다."
-            if n_days < 3 else f"최근 {n_days}일 · 실선 현물 / 점선 선물")
+            if n_days < 3 else f"최근 {n_days}일 · 현물 기준 (니켈만 3M 선물 병기)")
 
     chart_block = f"""
       <div style="font-size:13px;font-weight:700;margin:24px 0 4px;">시세 추이</div>
       <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">{note}</div>
       {canvas("ch_ni", "니켈",   "LME Cash · 3M 선물")}
       {canvas("ch_co", "코발트", "SMM 황산코발트 · Co 금속환산")}
-      {canvas("ch_li", "리튬",   "SMM 공업용(TG) · 배터리용(BG) · GFEX 선물")}
+      {canvas("ch_li", "리튬",   "SMM 공업용(TG) · 배터리용(BG) 현물")}
       <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
       <script>{_CHART_JS.replace("__CD__", json.dumps(CD, ensure_ascii=False))}</script>"""
 
@@ -1594,7 +1723,7 @@ def build_price_web(price_data: dict, usd_cny: float, hist: list,
   <div style="display:flex;justify-content:space-between;align-items:center;
               flex-wrap:wrap;gap:8px;margin-bottom:10px;">
     <span style="font-size:12px;color:#64748b;">
-      {today} · SMM 증치세 제외 · LME T-1 전일결산</span>
+      {today} · SMM 증치세 제외 · 품목 옆 태그가 시세 기준 시점</span>
     <button onclick="dlCsv()" style="font-size:11px;padding:5px 12px;
             border:1px solid #cbd5e1;border-radius:5px;background:#fff;
             cursor:pointer;color:#475569;">CSV 받기</button>
@@ -1781,6 +1910,7 @@ def build_archive_index():
         f.write(html)
     print(f"  아카이브 인덱스: {len(dates)}건")
 
+
 # ============================================================
 # 이메일 (시세 + 시사점 + 웹 링크)
 # ============================================================
@@ -1807,6 +1937,10 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
                 f'font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;">'
                 f'{label} {s["structure"]} {s["spread_pct"]:+.1f}%</span>')
 
+    FAIL_BADGE = ('<span style="display:inline-block;background:#fee2e2;color:#b91c1c;'
+                  'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
+                  'margin-left:3px;vertical-align:middle;">수집실패</span>')
+
     def trow(label, sub, badges, price_cell, extra_cell, pct):
         return f"""
         <tr>
@@ -1826,14 +1960,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
         pct  = r.get("change_pct", "N/A") if ok else "N/A"
 
         badges = _source_badge(src)
-        if r.get("delayed"):
-            badges += ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
-                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-                       'margin-left:3px;vertical-align:middle;">T-1</span>')
-        if not ok:
-            badges += ('<span style="display:inline-block;background:#fee2e2;color:#b91c1c;'
-                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-                       'margin-left:3px;vertical-align:middle;">수집실패</span>')
+        badges += (_basis_badge(r.get("basis"), r.get("delayed")) if ok else FAIL_BADGE)
 
         if ok:
             price_cell = (f'<b style="font-size:13px;">{_fmt(r.get("usd_excl"), "$")}</b>'
@@ -1859,15 +1986,7 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     for r in price_data["futures"]:
         ok  = r.get("status") == "OK"
         pct = r.get("change_pct", "N/A") if ok else "N/A"
-        badges = ""
-        if r.get("delayed"):
-            badges = ('<span style="display:inline-block;background:#fef3c7;color:#92400e;'
-                      'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-                      'margin-left:4px;vertical-align:middle;">T-1</span>')
-        if not ok:
-            badges += ('<span style="display:inline-block;background:#fee2e2;color:#b91c1c;'
-                       'font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
-                       'margin-left:3px;vertical-align:middle;">수집실패</span>')
+        badges = (_basis_badge(r.get("basis"), r.get("delayed")) if ok else FAIL_BADGE)
 
         if ok:
             if r.get("exchange") == "LME":
@@ -1901,8 +2020,9 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
     <td bgcolor="#ffffff" style="background:#ffffff;padding:20px 6px 16px;">
       <p style="margin:0 0 4px;font-size:12px;color:#64748b;padding:0 8px;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        {today} · SMM 증치세제외 기준 · LME T-1 전일결산가</p>
+        {today} · SMM 증치세제외 기준 · 품목 옆 태그가 시세 기준 시점</p>
       <p style="margin:0 0 14px;padding:0 8px;">{spread_badges or '&nbsp;'}</p>
+
       <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
              style="font-size:13px;background:#ffffff;border:1px solid #e2e8f0;border-collapse:collapse;">
         <thead><tr bgcolor="#f8fafc" style="background:#f8fafc;">
@@ -1920,9 +2040,10 @@ def build_price_section(price_data: dict, usd_cny: float) -> str:
           {fut_rows}
         </tbody>
       </table>
+
       <p style="margin:10px 8px 0;color:#94a3b8;font-size:11px;text-align:right;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        Co·Li 현물 <b>SMM</b> · Ni <b>LME</b> via Westmetall (T-1) · LC 선물 <b>GFEX</b></p>
+        Co·Li 현물 <b>SMM</b> · Ni <b>LME</b> via Westmetall · LC 선물 <b>GFEX</b> via eastmoney</p>
     </td>
   </tr>"""
 
@@ -1945,22 +2066,41 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
         </tr>"""
 
     n_art      = len(data.get("articles", []))
+    n_trend    = len(data.get("trends", []))
     price_rows = build_price_section(price_data, usd_cny) if price_data else ""
 
     link_row = f"""
   <tr>
-    <td bgcolor="#ffffff" style="background:#ffffff;padding:26px 30px;text-align:center;">
-      <table cellpadding="0" cellspacing="0" border="0" align="center">
-        <tr><td bgcolor="#1d4ed8" style="border-radius:6px;">
-          <a href="{web_url}" style="display:inline-block;padding:14px 30px;font-size:14px;
-             font-weight:700;color:#ffffff;text-decoration:none;
-             font-family:'Malgun Gothic',Arial,sans-serif;">
-            분야별 기사 {n_art}건 · 산업 흐름 · 시세 차트 &rarr;</a>
-        </td></tr>
-      </table>
-      <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;
+    <td bgcolor="#f1f5f9" style="background-color:#f1f5f9;padding:32px 30px 36px;
+        text-align:center;border-top:1px solid #e2e8f0;">
+      <p style="margin:0 0 4px;font-size:11px;font-weight:800;color:#2563eb;
+                letter-spacing:1.5px;font-family:'Malgun Gothic',Arial,sans-serif;">
+        TODAY'S FULL BRIEF</p>
+      <p style="margin:0 0 18px;font-size:15px;font-weight:700;color:#0f2744;
                 font-family:'Malgun Gothic',Arial,sans-serif;">
-        분야별 상위 3건 + 펼쳐보기 · 30일 시세 추이</p>
+        오늘 선별된 기사 {n_art}건과 산업 흐름 {n_trend}건</p>
+
+      <table cellpadding="0" cellspacing="0" border="0" align="center"
+             style="margin:0 auto;">
+        <tr>
+          <td bgcolor="#bfdbfe" style="background-color:#bfdbfe;border-radius:11px;padding:5px;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td bgcolor="#1d4ed8" style="background-color:#1d4ed8;border-radius:7px;">
+                  <a href="{web_url}" style="display:inline-block;padding:18px 42px;
+                     font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;
+                     letter-spacing:0.3px;font-family:'Malgun Gothic',Arial,sans-serif;">
+                    분야별 기사 · 산업 흐름 · 시세 차트 &nbsp;&rarr;</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin:16px 0 0;font-size:12px;color:#64748b;
+                font-family:'Malgun Gothic',Arial,sans-serif;">
+        분야별 상위 3건 + 펼쳐보기 · 30일 시세 추이 · CSV 내려받기</p>
     </td>
   </tr>"""
 
@@ -1985,6 +2125,7 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
 <table align="center" width="100%" cellpadding="0" cellspacing="0" border="0"
        style="max-width:680px;margin:0 auto;background-color:#ffffff;
               border:1px solid #e2e8f0;border-collapse:collapse;">
+
   <tr>
     <td bgcolor="#0f2744" style="background-color:#0f2744;padding:36px 30px;">
       <h1 style="color:#ffffff;font-size:23px;font-weight:700;margin:0 0 10px 0;
@@ -2004,7 +2145,7 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
       재활용 사업자 관점 시사점</td>
   </tr>
   <tr>
-    <td bgcolor="#ffffff" style="background:#ffffff;padding:26px 30px 6px;">
+    <td bgcolor="#ffffff" style="background:#ffffff;padding:26px 30px 26px;">
       <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#fefce8"
              style="background-color:#fefce8;border:1px solid #fde047;
                     border-radius:8px;border-collapse:collapse;">
@@ -2032,6 +2173,7 @@ def build_email(data, price_data=None, usd_cny=7.25, web_url=""):
 <!--[if mso]></td></tr></table><![endif]-->
 </body></html>"""
 
+
 # ============================================================
 # Gmail 발송
 # ============================================================
@@ -2047,7 +2189,9 @@ def send_email(html_body):
         smtp.login(GMAIL_USER, GMAIL_APP_PASS)
         bcc = [a.strip() for a in BCC_EMAIL.split(',') if a.strip()] if BCC_EMAIL else []
         smtp.sendmail(GMAIL_USER, [TO_EMAIL] + bcc, msg.as_string())
+
     print(f"발송 완료 -> {TO_EMAIL} (BCC {len(bcc)}명)")
+
 
 # ============================================================
 # 메인
@@ -2084,8 +2228,8 @@ async def main():
 
     os.makedirs("docs/archive", exist_ok=True)
     open("docs/.nojekyll", "w").close()   # Jekyll 처리 건너뛰기
-    stamp = now_kst().strftime("%Y-%m-%d")
 
+    stamp = now_kst().strftime("%Y-%m-%d")
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(build_web(data, price_data, usd_cny, hist, in_archive=False))
     with open(f"docs/archive/{stamp}.html", "w", encoding="utf-8") as f:
