@@ -1870,40 +1870,119 @@ def build_web(data, price_data=None, usd_cny=7.25, hist=None, in_archive=False):
 </body></html>"""
 
 
+_ARCHIVE_JS = """
+const DATES = __DATES__;
+const SET   = new Set(DATES);
+
+let cur;
+const pad = n => String(n).padStart(2, '0');
+const ym  = d => d.getFullYear() + '-' + pad(d.getMonth() + 1);
+
+function render() {
+  const y = cur.getFullYear(), m = cur.getMonth();
+  const first = new Date(y, m, 1).getDay();
+  const days  = new Date(y, m + 1, 0).getDate();
+
+  let cells = '';
+  for (let i = 0; i < first; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const key = y + '-' + pad(m + 1) + '-' + pad(d);
+    cells += SET.has(key)
+      ? '<a class="on" href="' + key + '.html">' + d + '</a>'
+      : '<span class="off">' + d + '</span>';
+  }
+  document.getElementById('cal').innerHTML = cells;
+  document.getElementById('label').textContent = y + '년 ' + (m + 1) + '월';
+
+  const minM = DATES[DATES.length - 1].slice(0, 7);
+  const maxM = DATES[0].slice(0, 7);
+  document.getElementById('prev').disabled = ym(cur) <= minM;
+  document.getElementById('next').disabled = ym(cur) >= maxM;
+}
+
+function move(n) {
+  cur = new Date(cur.getFullYear(), cur.getMonth() + n, 1);
+  render();
+}
+
+(function () {
+  const latest = DATES[0] || new Date().toISOString().slice(0, 10);
+  cur = new Date(+latest.slice(0, 4), +latest.slice(5, 7) - 1, 1);
+  render();
+})();
+"""
+
+_ARCHIVE_CSS = """
+  body { margin:0;background:#f8fafc;font-family:'Apple SD Gothic Neo',
+         'Malgun Gothic',Arial,sans-serif;color:#0f2744; }
+  .wrap { max-width:520px;margin:0 auto;padding:10px 16px 60px; }
+  .card { background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+          padding:18px 20px 22px;margin-top:18px; }
+  .nav { display:flex;align-items:center;justify-content:space-between;
+         margin-bottom:14px; }
+  .nav button { width:32px;height:32px;border:1px solid #e2e8f0;background:#fff;
+                border-radius:8px;font-size:15px;color:#334155;cursor:pointer;
+                line-height:1; }
+  .nav button:disabled { color:#e2e8f0;cursor:default; }
+  .nav b { font-size:15px; }
+  .wd, #cal { display:grid;grid-template-columns:repeat(7,1fr);gap:5px; }
+  .wd span { text-align:center;font-size:11px;color:#94a3b8;font-weight:700;
+             padding-bottom:6px; }
+  #cal a, #cal span { display:flex;align-items:center;justify-content:center;
+                      height:38px;border-radius:8px;font-size:14px; }
+  #cal a.on { background:#1d4ed8;color:#fff;font-weight:700;text-decoration:none; }
+  #cal a.on:hover { background:#1e40af; }
+  #cal span.off { color:#cbd5e1; }
+  details summary { cursor:pointer;font-size:13px;color:#2563eb;
+                    font-weight:600;padding:6px 0; }
+"""
+
+
 def build_archive_index():
     files = sorted(glob.glob("docs/archive/*.html"), reverse=True)
     dates = [os.path.basename(f)[:-5] for f in files
              if os.path.basename(f) != "index.html"]
+    dates = sorted([d for d in dates if re.match(r"\d{4}-\d{2}-\d{2}$", d)],
+                   reverse=True)
 
-    by_month = {}
-    for d in dates:
-        by_month.setdefault(d[:7], []).append(d)
-
-    body = ""
-    for month in sorted(by_month, reverse=True):
+    if dates:
         links = "".join(
-            f'<a href="{d}.html" style="display:inline-block;padding:7px 12px;'
-            f'margin:0 6px 6px 0;background:#fff;border:1px solid #e2e8f0;'
-            f'border-radius:6px;font-size:13px;color:#0f2744;'
-            f'text-decoration:none;">{d[8:]}일</a>'
-            for d in sorted(by_month[month], reverse=True))
-        body += (f'<h3 style="font-size:14px;color:#334155;margin:26px 0 10px;">'
-                 f'{month[:4]}년 {int(month[5:])}월</h3><div>{links}</div>')
+            f'<a href="{d}.html" style="display:inline-block;padding:6px 10px;'
+            f'margin:0 5px 5px 0;background:#fff;border:1px solid #e2e8f0;'
+            f'border-radius:6px;font-size:12px;color:#0f2744;'
+            f'text-decoration:none;">{d}</a>' for d in dates)
+        cal_block = f"""
+  <div class="card">
+    <div class="nav">
+      <button id="prev" onclick="move(-1)">&lsaquo;</button>
+      <b id="label"></b>
+      <button id="next" onclick="move(1)">&rsaquo;</button>
+    </div>
+    <div class="wd"><span>일</span><span>월</span><span>화</span><span>수</span>
+      <span>목</span><span>금</span><span>토</span></div>
+    <div id="cal"></div>
+  </div>
+  <details style="margin-top:16px;">
+    <summary>전체 목록 ({len(dates)}건)</summary>
+    <div style="margin-top:8px;">{links}</div>
+  </details>
+  <script>{_ARCHIVE_JS.replace("__DATES__", json.dumps(dates))}</script>"""
+    else:
+        cal_block = '<p style="color:#94a3b8;font-size:13px;">아직 없습니다.</p>'
 
     html = f"""<!DOCTYPE html><html lang="ko"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>Daily Brief 아카이브</title>
-</head><body style="margin:0;background:#f8fafc;font-family:'Apple SD Gothic Neo',
-'Malgun Gothic',Arial,sans-serif;color:#0f2744;">
+<style>{_ARCHIVE_CSS}</style></head><body>
 <div style="background:#0f2744;color:#fff;padding:24px 0;">
-  <div style="max-width:760px;margin:0 auto;padding:0 16px;">
+  <div style="max-width:520px;margin:0 auto;padding:0 16px;">
     <div style="font-size:18px;font-weight:700;">DAILY BRIEF 아카이브</div>
     <div style="color:#94a3b8;font-size:12px;margin-top:5px;">총 {len(dates)}건</div>
   </div></div>
-<div style="max-width:760px;margin:0 auto;padding:10px 16px 60px;">
-  <a href="../index.html" style="display:inline-block;margin:18px 0 6px;
+<div class="wrap">
+  <a href="../index.html" style="display:inline-block;margin:18px 0 2px;
      font-size:13px;color:#2563eb;text-decoration:none;">← 오늘 브리핑</a>
-  {body or '<p style="color:#94a3b8;font-size:13px;">아직 없습니다.</p>'}
+  {cal_block}
 </div></body></html>"""
 
     with open("docs/archive/index.html", "w", encoding="utf-8") as f:
