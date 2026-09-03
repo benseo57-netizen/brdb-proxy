@@ -565,8 +565,12 @@ async def _scrape_spot(page, target: dict) -> dict:
         change_pct = next((p for p in all_pcts if p != "0%"),
                           ("0.00%" if all_pcts else "N/A"))
 
-        date_m = re.search(
-            r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})", text)
+        _MON_RE   = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+        raw_dates = re.findall(rf"({_MON_RE}\s+\d{{1,2}},\s+\d{{4}})", text)
+        _today    = now_kst().date()
+        _cands    = [d for d in (parse_quote_date(s) for s in raw_dates)
+                     if d and d.date() <= _today]
+        _picked   = max(_cands) if _cands else None
 
         usd_excl = float(usd_list[0].replace(",", "")) if usd_list else None
         cny_incl = float(cny_list[0].replace(",", "")) if cny_list else None
@@ -580,8 +584,9 @@ async def _scrape_spot(page, target: dict) -> dict:
         usd_metal = round(usd_excl / mc) if (usd_excl and mc) else None
         cny_metal = round(cny_excl / mc) if (cny_excl and mc) else None
 
-        date_txt     = date_m.group(1) if date_m else "N/A"
+        date_txt     = _picked.strftime("%b %d, %Y") if _picked else "N/A"
         basis, stale = make_basis(date_txt, "고시")
+        print(f"    [{target['name']}] 날짜후보 {raw_dates[:6]} -> 채택 {date_txt}")
 
         return {
             **base,
@@ -607,7 +612,16 @@ _EM_JS = r"""
     const m = t.match(new RegExp(label + '[\\s:：]*(-?\\d+(?:\\.\\d+)?)'));
     return m ? parseFloat(m[1]) : null;
   };
-  const tm = t.match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/);
+  // 헤더의 （2026-09-03 10:04:12） 를 우선 사용, 없으면 페이지 내 가장 늦은 시각
+  let ts = null;
+  const hm = t.match(/[（(](\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})[）)]/);
+  if (hm) {
+    ts = hm[1];
+  } else {
+    const all = [...t.matchAll(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/g)]
+      .map(m => m[1]).sort();
+    ts = all.length ? all[all.length - 1] : null;
+  }
   const pm = t.match(/涨幅[\s:：]*(-?\d+(?:\.\d+)?)\s*%/);
   const sm = t.match(/(?<![昨前])结算[\s:：]*(\d+(?:\.\d+)?)/);
 
@@ -618,7 +632,7 @@ _EM_JS = r"""
     last = c.length ? c[0] : null;
   }
   return {
-    ts:     tm ? tm[1] : null,
+    ts:     ts,
     last:   last,
     prev:   num('昨结算'),
     settle: sm ? parseFloat(sm[1]) : null,
