@@ -2,10 +2,8 @@ name: Battery Recycling Daily Brief
 
 on:
   schedule:
-    # UTC 02:37 = KST 11:37 (평일)
-    # SMM 코발트 갱신(11:30 KST) 이후 + GFEX 1절 장중(10:00~11:15 KST)
-    # 러너 지연이 붙으면 실제 실행은 11:37~13:00 KST 사이
-    - cron: '37 2 * * 1-5'
+    # UTC 00:24 = KST 09:24 (정시 트래픽 회피용, 매일)
+    - cron: '24 0 * * *'
   workflow_dispatch:        # 수동 실행 버튼
 
 jobs:
