@@ -24,7 +24,7 @@
     <div id="wx" style="margin-top:14px;display:flex;gap:18px;flex-wrap:wrap;
                         font-size:13px;color:#cbd5e1;">불러오는 중…</div>
     <div style="margin-top:12px;">
-      <a href="archive/index.html" style="font-size:12px;color:#93c5fd;
+      <a href="index.html" style="font-size:12px;color:#93c5fd;
          text-decoration:none;">지난 브리핑 보기 &rarr;</a></div>
   </div>
 </div>
@@ -195,7 +195,7 @@ function dlCsv() {
   const H = ['날짜','LME니켈현물','LME니켈3M','황산코발트','Co금속환산',
              'TG탄산리튬','BG탄산리튬','GFEX선물','USD/CNY'];
   const K = ['date','ni','ni_3m','co','co_metal','li_ind','li_bat','lc_fut','usd_cny'];
-  fetch('data/prices.json').then(r => r.json()).then(rows => {
+  fetch('../data/prices.json').then(r => r.json()).then(rows => {
     const csv = '\uFEFF' + [H.join(',')]
       .concat(rows.map(r => K.map(k => (r[k] == null ? '' : r[k])).join(','))).join('\n');
     const a = document.createElement('a');
