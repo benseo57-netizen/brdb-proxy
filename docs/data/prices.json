@@ -166,5 +166,19 @@
   "lc_fut": 17728,
   "lc_settle": null,
   "lc_prev": 133960
+ },
+ {
+  "date": "2026-09-15",
+  "usd_cny": 6.7084,
+  "ni": 16205.0,
+  "ni_3m": 16400,
+  "ni_basis": "09.14 종가",
+  "co": 8716.93,
+  "co_metal": 42522,
+  "li_ind": 17348.33,
+  "li_bat": 17874.64,
+  "lc_fut": 17215,
+  "lc_settle": null,
+  "lc_prev": 133560
  }
 ]
